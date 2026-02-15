@@ -7,6 +7,9 @@ from crossmodalrag.db import connect, init_db
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
 
+TEST_AUTHOR_NAME = "Test User"
+TEST_AUTHOR_EMAIL = "test@example.com"
+
 
 def test_ingest_notes_skips_unchanged(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
@@ -77,16 +80,16 @@ def test_ingest_git_skips_unchanged_and_backfills_legacy_fingerprint(tmp_path: P
     repo = tmp_path / "repo"
     repo.mkdir()
     _run(["git", "-C", str(repo), "init"])
-    _run(["git", "-C", str(repo), "config", "user.name", "Jacob Walcutt"])
-    _run(["git", "-C", str(repo), "config", "user.email", "jwalcutt22@gmail.com"])
+    _run(["git", "-C", str(repo), "config", "user.name", TEST_AUTHOR_NAME])
+    _run(["git", "-C", str(repo), "config", "user.email", TEST_AUTHOR_EMAIL])
 
     file_path = repo / "main.py"
     file_path.write_text("print('v1')\n", encoding="utf-8")
     _run(["git", "-C", str(repo), "add", "main.py"])
     _run(["git", "-C", str(repo), "commit", "-m", "initial"])
 
-    monkeypatch.setenv("TARGET_AUTHOR_NAME", "Jacob Walcutt")
-    monkeypatch.setenv("TARGET_AUTHOR_EMAIL", "jwalcutt22@gmail.com")
+    monkeypatch.setenv("TARGET_AUTHOR_NAME", TEST_AUTHOR_NAME)
+    monkeypatch.setenv("TARGET_AUTHOR_EMAIL", TEST_AUTHOR_EMAIL)
 
     conn = connect(tmp_path / "mem.db")
     try:
@@ -130,14 +133,14 @@ def test_repeated_ingestion_is_idempotent_for_persisted_data(tmp_path: Path, mon
     repo = tmp_path / "repo"
     repo.mkdir()
     _run(["git", "-C", str(repo), "init"])
-    _run(["git", "-C", str(repo), "config", "user.name", "Jacob Walcutt"])
-    _run(["git", "-C", str(repo), "config", "user.email", "jwalcutt22@gmail.com"])
+    _run(["git", "-C", str(repo), "config", "user.name", TEST_AUTHOR_NAME])
+    _run(["git", "-C", str(repo), "config", "user.email", TEST_AUTHOR_EMAIL])
     (repo / "main.py").write_text("print('v1')\n", encoding="utf-8")
     _run(["git", "-C", str(repo), "add", "main.py"])
     _run(["git", "-C", str(repo), "commit", "-m", "initial"])
 
-    monkeypatch.setenv("TARGET_AUTHOR_NAME", "Jacob Walcutt")
-    monkeypatch.setenv("TARGET_AUTHOR_EMAIL", "jwalcutt22@gmail.com")
+    monkeypatch.setenv("TARGET_AUTHOR_NAME", TEST_AUTHOR_NAME)
+    monkeypatch.setenv("TARGET_AUTHOR_EMAIL", TEST_AUTHOR_EMAIL)
 
     conn = connect(tmp_path / "mem.db")
     try:

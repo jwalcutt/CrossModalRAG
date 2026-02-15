@@ -142,11 +142,12 @@ def _load_commit_rows(repo_path: Path, max_commits: int) -> list[tuple[str, str,
         "-C",
         str(repo_path),
         "log",
+        "--encoding=none",
         f"--max-count={max_commits}",
         f"--pretty=format:{fmt}",
         "--no-merges",
     ]
-    out = subprocess.run(log_cmd, check=True, capture_output=True, text=True).stdout
+    out = _run_git_text(log_cmd)
     commits: list[tuple[str, str, str, str, str, str, str]] = []
     for record in out.split("\x1e"):
         record = record.strip()
@@ -170,7 +171,12 @@ def _load_commit_rows(repo_path: Path, max_commits: int) -> list[tuple[str, str,
 
 def _commit_patch(repo_path: Path, sha: str) -> str:
     cmd = ["git", "-C", str(repo_path), "show", "--format=", "--patch", "--stat", sha]
-    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    return _run_git_text(cmd)
+
+
+def _run_git_text(cmd: list[str]) -> str:
+    completed = subprocess.run(cmd, check=True, capture_output=True)
+    return completed.stdout.decode("utf-8", errors="replace")
 
 
 def _delete_source_and_chunks(conn: sqlite3.Connection, source_uri: str) -> None:
