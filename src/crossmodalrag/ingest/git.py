@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -23,39 +24,25 @@ def ingest_git(conn: sqlite3.Connection, repo_path: Path, max_commits: int = 300
             _delete_source_and_chunks(conn, source_uri=source_uri)
             continue
         combined = f"commit: {subject}\n\n{body}\n\n{patch}".strip()
-
-        cur = conn.execute(
-            """
-            INSERT OR IGNORE INTO sources (source_type, source_uri, timestamp, title, metadata_json)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                "git_commit",
-                source_uri,
-                ts,
-                subject[:200],
-                json.dumps(
-                    {
-                        "repo": str(repo_path.resolve()),
-                        "sha": sha,
-                        "author_name": author_name,
-                        "author_email": author_email,
-                    }
-                ),
+        source_fingerprint = _source_fingerprint(combined)
+        source_id, unchanged = _upsert_git_source(
+            conn=conn,
+            source_uri=source_uri,
+            source_fingerprint=source_fingerprint,
+            timestamp=ts,
+            title=subject[:200],
+            metadata_json=json.dumps(
+                {
+                    "repo": str(repo_path.resolve()),
+                    "sha": sha,
+                    "author_name": author_name,
+                    "author_email": author_email,
+                    "fingerprint": source_fingerprint,
+                }
             ),
         )
-        source_id = cur.lastrowid
-        if not source_id:
-            existing = conn.execute(
-                """
-                SELECT id FROM sources
-                WHERE source_type = ? AND source_uri = ? AND timestamp = ?
-                """,
-                ("git_commit", source_uri, ts),
-            ).fetchone()
-            if not existing:
-                continue
-            source_id = int(existing["id"])
+        if unchanged:
+            continue
 
         conn.execute("DELETE FROM evidence_chunks WHERE source_id = ?", (source_id,))
         for idx, chunk in enumerate(chunk_text(combined, max_chars=1400, overlap=180)):
@@ -82,6 +69,70 @@ def ingest_git(conn: sqlite3.Connection, repo_path: Path, max_commits: int = 300
             inserted_chunks += 1
     conn.commit()
     return inserted_chunks
+
+
+def _source_fingerprint(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _upsert_git_source(
+    conn: sqlite3.Connection,
+    source_uri: str,
+    source_fingerprint: str,
+    timestamp: str,
+    title: str,
+    metadata_json: str,
+) -> tuple[int, bool]:
+    rows = conn.execute(
+        """
+        SELECT id, source_fingerprint, timestamp FROM sources
+        WHERE source_type = ? AND source_uri = ?
+        ORDER BY id ASC
+        """,
+        ("git_commit", source_uri),
+    ).fetchall()
+    if not rows:
+        cur = conn.execute(
+            """
+            INSERT INTO sources (source_type, source_uri, source_fingerprint, timestamp, title, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("git_commit", source_uri, source_fingerprint, timestamp, title, metadata_json),
+        )
+        return int(cur.lastrowid), False
+
+    canonical_id = int(rows[-1]["id"])
+    existing_fingerprint = rows[-1]["source_fingerprint"]
+    existing_timestamp = rows[-1]["timestamp"]
+    is_legacy_unchanged = existing_fingerprint is None and existing_timestamp == timestamp
+    is_unchanged = existing_fingerprint == source_fingerprint or is_legacy_unchanged
+
+    for row in rows[:-1]:
+        old_id = int(row["id"])
+        conn.execute("DELETE FROM evidence_chunks WHERE source_id = ?", (old_id,))
+        conn.execute("DELETE FROM sources WHERE id = ?", (old_id,))
+
+    if is_unchanged:
+        if existing_fingerprint is None:
+            conn.execute(
+                """
+                UPDATE sources
+                SET source_fingerprint = ?, title = ?, metadata_json = ?
+                WHERE id = ?
+                """,
+                (source_fingerprint, title, metadata_json, canonical_id),
+            )
+        return canonical_id, True
+
+    conn.execute(
+        """
+        UPDATE sources
+        SET source_fingerprint = ?, timestamp = ?, title = ?, metadata_json = ?
+        WHERE id = ?
+        """,
+        (source_fingerprint, timestamp, title, metadata_json, canonical_id),
+    )
+    return canonical_id, False
 
 
 def _load_commit_rows(repo_path: Path, max_commits: int) -> list[tuple[str, str, str, str, str, str, str]]:
@@ -123,18 +174,20 @@ def _commit_patch(repo_path: Path, sha: str) -> str:
 
 
 def _delete_source_and_chunks(conn: sqlite3.Connection, source_uri: str) -> None:
-    row = conn.execute(
+    rows = conn.execute(
         """
         SELECT id FROM sources
         WHERE source_type = ? AND source_uri = ?
+        ORDER BY id ASC
         """,
         ("git_commit", source_uri),
-    ).fetchone()
-    if not row:
+    ).fetchall()
+    if not rows:
         return
-    source_id = int(row["id"])
-    conn.execute("DELETE FROM evidence_chunks WHERE source_id = ?", (source_id,))
-    conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+    for row in rows:
+        source_id = int(row["id"])
+        conn.execute("DELETE FROM evidence_chunks WHERE source_id = ?", (source_id,))
+        conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
 
 
 def _load_target_author() -> tuple[str, str]:

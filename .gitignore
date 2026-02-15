@@ -1,5 +1,7 @@
 /data
 dev-steps.md
+AGENTS.md
+project-scope.md
 .venv/
 .DS_Store
 __pycache__/

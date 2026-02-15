@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_type TEXT NOT NULL,
     source_uri TEXT NOT NULL,
+    source_fingerprint TEXT,
     timestamp TEXT,
     title TEXT,
     metadata_json TEXT,
@@ -47,5 +48,22 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(DDL)
+    _run_migrations(conn)
     conn.commit()
 
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    _ensure_column(conn, table_name="sources", column_name="source_fingerprint", column_def="TEXT")
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_def: str,
+) -> None:
+    columns = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    existing = {str(row["name"]) for row in columns}
+    if column_name in existing:
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}")
