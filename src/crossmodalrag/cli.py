@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from crossmodalrag.config import get_db_path
+from crossmodalrag.config import get_db_path, load_dotenv
 from crossmodalrag.db import connect, init_db
 from crossmodalrag.generate.answer import format_grounded_answer
 from crossmodalrag.ingest.git import ingest_git
@@ -75,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    load_dotenv()
     parser = build_parser()
     args = parser.parse_args()
     if args.command == "init-db":
