@@ -1,6 +1,7 @@
 /data
 .agents/
 .claude/
+eval/
 dev-steps.md
 AGENTS.md
 project-scope.md

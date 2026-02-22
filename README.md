@@ -36,11 +36,27 @@ mem seed-sample
 mem ingest-notes /path/to/obsidian/vault
 ```
 
+Or ingest multiple vaults in one command:
+
+```bash
+mem ingest-notes /path/to/vault-a /path/to/vault-b
+```
+
+If you omit paths, `mem ingest-notes` will use all `OBSIDIAN_VAULT_PATH_<n>` values from your local `.env`.
+
 4. Ingest git history:
 
 ```bash
 mem ingest-git /path/to/repo --max-commits 300
 ```
+
+Or ingest multiple repos in one command:
+
+```bash
+mem ingest-git /path/to/repo-a /path/to/repo-b --max-commits 300
+```
+
+If you omit paths, `mem ingest-git` will use all `REPO_PATH_<n>` values from your local `.env`.
 
 5. Ask a question:
 
@@ -48,13 +64,20 @@ mem ingest-git /path/to/repo --max-commits 300
 mem ask "Why did I change the parser?" --top-k 5
 ```
 
+6. Run retrieval evaluation (using seeded sample queries or your own `queries_eval` rows):
+
+```bash
+mem eval --top-k 5
+```
+
 ## CLI Commands
 
 - `mem init-db`
 - `mem seed-sample [--workspace-dir PATH] [--force]`
-- `mem ingest-notes <vault_path>`
-- `mem ingest-git <repo_path> [--max-commits N]`
+- `mem ingest-notes [<vault_path> ...]` (falls back to `.env` `OBSIDIAN_VAULT_PATH_*`)
+- `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
 - `mem ask "<query>" [--top-k N]`
+- `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json]`
 
 ## Synthetic Sample Seed Workflow
 
@@ -66,14 +89,14 @@ Use `mem seed-sample` to create a tiny deterministic sample vault + sample git r
 - Populates namespaced sample rows in `queries_eval` for future eval/smoke tests
 - Safe to re-run; unchanged content is reused and ingestion remains idempotent
 
-Use `--force` to rebuild the sample workspace directory from scratch.
-Use `--db-path` if you want the sample dataset in a specific non-main database path.
-
-If you ran an older version that seeded sample data into your main DB, remove it with:
+Run the sample retrieval benchmark:
 
 ```bash
-python scripts/remove_synthetic_seed_data.py
+mem eval --query-prefix "[sample]" --top-k 5
 ```
+
+Use `--force` to rebuild the sample workspace directory from scratch.
+Use `--db-path` if you want the sample dataset in a specific non-main database path.
 
 ## Data Location
 
@@ -86,3 +109,21 @@ Set `CMRAG_DB_PATH` to override:
 ```bash
 export CMRAG_DB_PATH=/absolute/path/to/memory.db
 ```
+
+## Evaluation Query File Format (`mem eval --load-queries`)
+
+Use a JSON array of rows:
+
+```json
+[
+  {
+    "query_text": "What fixed the parser bounds check bug?",
+    "expected_source_uris": [
+      "/abs/path/to/repo@abc123",
+      "/abs/path/to/note/http-parser.md"
+    ]
+  }
+]
+```
+
+`mem eval --load-queries file.json` upserts rows into `queries_eval` and then runs metrics (`Recall@K`, `MRR@K`, and an approximate citation hit-rate based on the top retrieved source).

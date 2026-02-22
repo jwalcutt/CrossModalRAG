@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -25,3 +26,17 @@ def get_db_path() -> Path:
         return Path(raw).expanduser().resolve()
     return Path.cwd() / "data" / "memory.db"
 
+
+def get_numbered_env_paths(prefix: str) -> list[Path]:
+    pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)$")
+    indexed: list[tuple[int, Path]] = []
+    for key, raw in os.environ.items():
+        match = pattern.match(key)
+        if not match:
+            continue
+        value = raw.strip()
+        if not value:
+            continue
+        indexed.append((int(match.group(1)), Path(value).expanduser().resolve()))
+    indexed.sort(key=lambda item: item[0])
+    return [path for _, path in indexed]
