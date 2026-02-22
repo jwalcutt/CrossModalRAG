@@ -9,6 +9,7 @@ from crossmodalrag.generate.answer import format_grounded_answer
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
 from crossmodalrag.retrieve.lexical import retrieve
+from crossmodalrag.sample_data import default_sample_db_path, seed_sample_data
 
 def init_db_cmd() -> None:
     db_path = get_db_path()
@@ -54,6 +55,30 @@ def ask_cmd(query: str, top_k: int = 5) -> None:
     print(format_grounded_answer(query, hits))
 
 
+def seed_sample_cmd(
+    workspace_dir: Path,
+    force: bool = False,
+    db_path: Path | None = None,
+) -> None:
+    db_path = (db_path or default_sample_db_path()).expanduser().resolve()
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        result = seed_sample_data(conn, workspace_dir=workspace_dir, force=force)
+    finally:
+        conn.close()
+    print(f"Seeded sample data into sample DB: {db_path}")
+    print("Main DB was not modified.")
+    print(f"Workspace: {result.workspace_dir}")
+    print(f"Sample vault: {result.vault_dir}")
+    print(f"Sample git repo: {result.repo_dir}")
+    print(
+        "Inserted chunks "
+        f"(notes={result.notes_chunks_inserted}, git={result.git_chunks_inserted}); "
+        f"eval queries upserted={result.eval_queries_upserted}"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CrossModalRAG local memory CLI.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -70,6 +95,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask = sub.add_parser("ask", help="Query indexed evidence.")
     p_ask.add_argument("query", type=str)
     p_ask.add_argument("--top-k", type=int, default=5)
+
+    p_seed = sub.add_parser(
+        "seed-sample",
+        help="Create deterministic synthetic notes/git fixtures and ingest them into the DB.",
+    )
+    p_seed.add_argument(
+        "--workspace-dir",
+        type=Path,
+        default=Path("data") / "sample-seed-workspace",
+        help="Directory for generated synthetic sample vault and git repo.",
+    )
+    p_seed.add_argument(
+        "--db-path",
+        type=Path,
+        default=None,
+        help="DB path for synthetic sample data (defaults to a temp DB, not the main memory DB).",
+    )
+    p_seed.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild the sample workspace directory if it already exists (destructive).",
+    )
 
     return parser
 
@@ -89,6 +136,9 @@ def main() -> None:
         return
     if args.command == "ask":
         ask_cmd(args.query, top_k=args.top_k)
+        return
+    if args.command == "seed-sample":
+        seed_sample_cmd(args.workspace_dir, force=args.force, db_path=args.db_path)
         return
     parser.error(f"Unknown command: {args.command}")
 

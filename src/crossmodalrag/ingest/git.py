@@ -10,11 +10,18 @@ from pathlib import Path
 from crossmodalrag.chunking import chunk_text
 
 
-def ingest_git(conn: sqlite3.Connection, repo_path: Path, max_commits: int = 300) -> int:
+def ingest_git(
+    conn: sqlite3.Connection,
+    repo_path: Path,
+    max_commits: int = 300,
+    target_author_name: str | None = None,
+    target_author_email: str | None = None,
+) -> int:
     if not (repo_path / ".git").exists():
         raise FileNotFoundError(f"Not a git repository: {repo_path}")
 
-    target_author_name, target_author_email = _load_target_author()
+    if target_author_name is None or target_author_email is None:
+        target_author_name, target_author_email = _load_target_author()
     rows = _load_commit_rows(repo_path, max_commits=max_commits)
     inserted_chunks = 0
     for row in rows:

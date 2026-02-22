@@ -1,0 +1,28 @@
+[
+  {
+    "date": "2026-01-10T15:00:00+00:00",
+    "message": "bootstrap sample repo",
+    "files": {
+      "README.md": "# Sample Repo\\n\\nSynthetic repository used for CrossModalRAG pipeline smoke tests.\\n",
+      "src/pipeline.py": "def status():\\n    return 'bootstrap'\\n"
+    }
+  },
+  {
+    "date": "2026-01-12T18:30:00+00:00",
+    "message": "add retrieval smoke test",
+    "files": {
+      "README.md": "# Sample Repo\\n\\nSynthetic repository used for CrossModalRAG pipeline smoke tests.\\n\\nIncludes retrieval smoke-test fixtures.\\n",
+      "src/pipeline.py": "def status():\\n    return 'retrieval-smoke-test'\\n\\n\\ndef smoke_query():\\n    return 'seed command scaffold'\\n",
+      "tests/smoke_queries.txt": "Where is the pipeline integrity plan documented?\\nWhich commit added the seeding command scaffold?\\n"
+    }
+  },
+  {
+    "date": "2026-01-13T09:45:00+00:00",
+    "message": "cli: add sample seeding command scaffold",
+    "files": {
+      "README.md": "# Sample Repo\\n\\nSynthetic repository used for CrossModalRAG pipeline smoke tests.\\n\\nIncludes retrieval smoke-test fixtures and a sample seeding command stub.\\n",
+      "src/cli_stub.py": "def seed_sample():\\n    return 'scaffolded'\\n",
+      "src/pipeline.py": "def status():\\n    return 'seed-command-scaffolded'\\n\\n\\ndef smoke_query():\\n    return 'seed command scaffold'\\n"
+    }
+  }
+]

@@ -1,7 +1,11 @@
 /data
+.agents/
+.claude/
 dev-steps.md
 AGENTS.md
 project-scope.md
+SKILL.md
+skills-lock.json
 .venv/
 .DS_Store
 __pycache__/
