@@ -5,7 +5,12 @@ import json
 import sys
 from pathlib import Path
 
-from crossmodalrag.config import get_db_path, get_numbered_env_paths, load_dotenv
+from crossmodalrag.config import (
+    get_db_path,
+    get_extract_model,
+    get_numbered_env_paths,
+    load_dotenv,
+)
 from crossmodalrag.db import connect, init_db
 from crossmodalrag.embed.provider import (
     DEFAULT_EMBED_MODEL,
@@ -25,6 +30,7 @@ from crossmodalrag.generate.synthesize import synthesize_answer
 from crossmodalrag.generation_eval import run_generation_eval
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
+from crossmodalrag.memory.extract import extract_pending_sources
 from crossmodalrag.memory.integrity import (
     count_edges,
     count_nodes_by_level,
@@ -250,6 +256,31 @@ def eval_generation_cmd(
             print(f"  - {query_text}")
 
 
+def build_memory_cmd(level: str = "event", limit: int | None = None, model: str | None = None) -> None:
+    db_path = get_db_path()
+    provider = get_default_llm_provider(model or get_extract_model())
+    if provider is None:
+        raise SystemExit("No LLM provider configured (set CMRAG_LLM_PROVIDER).")
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        try:
+            result = extract_pending_sources(conn, provider, limit=limit)
+        except LLMUnavailable as exc:
+            raise SystemExit(str(exc))
+    finally:
+        conn.close()
+
+    print(f"Memory DB: {db_path}")
+    print(f"Level: L1 {level} | model: {provider.name}")
+    print(f"Sources processed: {result.sources_processed}")
+    print(f"Sources skipped (up to date): {result.sources_skipped}")
+    print(f"Events created: {result.events_created}")
+    if result.parse_failures:
+        print(f"Sources with unparseable output (will retry next run): {result.parse_failures}")
+    print("Run `mem memory-stats` to inspect node/edge counts and integrity.")
+
+
 def memory_stats_cmd() -> None:
     db_path = get_db_path()
     conn = connect(db_path)
@@ -416,6 +447,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM model id (defaults to CMRAG_LLM_MODEL).",
     )
 
+    p_build = sub.add_parser(
+        "build-memory",
+        help="Derive hierarchical memory from L0 evidence (currently L1 atomic events; requires Ollama).",
+    )
+    p_build.add_argument(
+        "--level",
+        choices=["event"],
+        default="event",
+        help="Memory level to build (only 'event' is implemented in this phase).",
+    )
+    p_build.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Max number of sources to (re)process this run (resumable across runs).",
+    )
+    p_build.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Extraction model id (defaults to CMRAG_EXTRACT_MODEL).",
+    )
+
     sub.add_parser(
         "memory-stats",
         help="Show hierarchical memory node/edge counts and structural integrity status.",
@@ -510,6 +564,9 @@ def main() -> None:
             profile=args.profile,
             model=args.model,
         )
+        return
+    if args.command == "build-memory":
+        build_memory_cmd(level=args.level, limit=args.limit, model=args.model)
         return
     if args.command == "memory-stats":
         memory_stats_cmd()

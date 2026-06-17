@@ -47,6 +47,10 @@ def get_llm_timeout() -> float:
         return 120.0
 
 
+def get_extract_model() -> str:
+    return os.getenv("CMRAG_EXTRACT_MODEL", "llama3.2").strip() or "llama3.2"
+
+
 def get_min_evidence_score() -> float:
     raw = os.getenv("CMRAG_MIN_EVIDENCE_SCORE", "0.15").strip()
     try:

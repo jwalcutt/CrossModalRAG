@@ -75,6 +75,16 @@ CREATE TABLE IF NOT EXISTS memory_edges (
 CREATE INDEX IF NOT EXISTS idx_memory_edges_parent ON memory_edges(parent_level, parent_id);
 CREATE INDEX IF NOT EXISTS idx_memory_edges_child ON memory_edges(child_level, child_id);
 
+CREATE TABLE IF NOT EXISTS memory_derivations (
+    source_id INTEGER NOT NULL,
+    level INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    model TEXT,
+    prompt_version TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source_id, level)
+);
+
 CREATE TABLE IF NOT EXISTS queries_eval (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     query_text TEXT NOT NULL,

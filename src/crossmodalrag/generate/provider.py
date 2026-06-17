@@ -77,13 +77,14 @@ class OllamaProvider:
         return str(data.get("response", "")).strip()
 
 
-def get_default_llm_provider() -> LLMProvider | None:
+def get_default_llm_provider(model: str | None = None) -> LLMProvider | None:
     """Return the configured LLM provider, or ``None`` for an unknown backend.
 
     Construction is cheap and does not open a connection; reachability is
     determined when ``generate`` is first called (raising ``LLMUnavailable``).
+    Pass ``model`` to override the configured model (e.g. a faster extraction model).
     """
     provider_name = get_llm_provider_name()
     if provider_name == "ollama":
-        return OllamaProvider()
+        return OllamaProvider(model=model)
     return None

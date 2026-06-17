@@ -161,6 +161,28 @@ unanswerable ones). Queries with empty `expected_source_uris` are treated as neg
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
+- `mem build-memory [--level event] [--limit N] [--model ID]` (requires Ollama)
+- `mem memory-stats`
+
+## Hierarchical Memory (experimental)
+
+Beyond flat evidence retrieval, CrossModalRAG can build higher-level memory layers on top of the
+L0 evidence chunks: L1 atomic events → L2 episodes → L3 concepts (see `project-scope.md` §2). Every
+higher-level node is traceable down to its L0 evidence.
+
+Currently implemented: the node/edge substrate and **L1 atomic-event extraction**. `mem build-memory`
+uses a local LLM (Ollama) to extract atomic events ("what happened": a decision, learning, fix,
+task, or change) from each source, linking each event to its L0 evidence.
+
+```bash
+mem build-memory --limit 50    # extract L1 events for up to 50 sources (resumable)
+mem memory-stats               # node/edge counts + structural integrity
+```
+
+Extraction is deterministic and incremental: a source is re-processed only when its content, the
+model, or the prompt version changes — re-running on unchanged data is a no-op. It uses
+`CMRAG_EXTRACT_MODEL` (default `llama3.2`, kept separate from the synthesis model so bulk extraction
+stays fast); `--model` overrides per run.
 
 ## Synthetic Sample Seed Workflow
 
@@ -207,6 +229,7 @@ export CMRAG_LLM_MODEL=gemma4              # swap for any model you have in `oll
 export CMRAG_LLM_BASE_URL=http://localhost:11434
 export CMRAG_LLM_TIMEOUT=120
 export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval score
+export CMRAG_EXTRACT_MODEL=llama3.2        # model for `mem build-memory` event extraction
 ```
 
 See `.env.example` for the full list of supported variables.

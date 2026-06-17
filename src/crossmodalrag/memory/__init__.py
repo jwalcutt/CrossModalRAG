@@ -1,3 +1,9 @@
+from crossmodalrag.memory.extract import (
+    EVENT_PROMPT_VERSION,
+    ExtractionResult,
+    extract_events_for_source,
+    extract_pending_sources,
+)
 from crossmodalrag.memory.integrity import (
     count_edges,
     count_nodes_by_level,
@@ -21,10 +27,14 @@ from crossmodalrag.memory.store import (
 
 __all__ = [
     "DOWNWARD_RELATIONS",
+    "EVENT_PROMPT_VERSION",
     "EVIDENCE_LEVEL",
+    "ExtractionResult",
     "MemoryNode",
     "add_edge",
     "count_edges",
+    "extract_events_for_source",
+    "extract_pending_sources",
     "count_nodes_by_level",
     "count_nodes_by_type",
     "delete_node",
