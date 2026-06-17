@@ -41,6 +41,40 @@ CREATE TABLE IF NOT EXISTS chunk_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model ON chunk_embeddings(model);
 
+CREATE TABLE IF NOT EXISTS memory_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level INTEGER NOT NULL CHECK(level IN (1,2,3)),
+    node_type TEXT NOT NULL,
+    title TEXT,
+    content TEXT,
+    time_start TEXT,
+    time_end TEXT,
+    derivation_fingerprint TEXT,
+    model TEXT,
+    prompt_version TEXT,
+    confidence REAL,
+    metadata_json TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_level ON memory_nodes(level);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_type ON memory_nodes(node_type);
+
+CREATE TABLE IF NOT EXISTS memory_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_level INTEGER NOT NULL,
+    parent_id INTEGER NOT NULL,
+    child_level INTEGER NOT NULL,
+    child_id INTEGER NOT NULL,
+    relation TEXT NOT NULL,
+    weight REAL DEFAULT 1.0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(parent_level, parent_id, child_level, child_id, relation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_edges_parent ON memory_edges(parent_level, parent_id);
+CREATE INDEX IF NOT EXISTS idx_memory_edges_child ON memory_edges(child_level, child_id);
+
 CREATE TABLE IF NOT EXISTS queries_eval (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     query_text TEXT NOT NULL,

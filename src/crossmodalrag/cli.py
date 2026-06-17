@@ -25,6 +25,13 @@ from crossmodalrag.generate.synthesize import synthesize_answer
 from crossmodalrag.generation_eval import run_generation_eval
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
+from crossmodalrag.memory.integrity import (
+    count_edges,
+    count_nodes_by_level,
+    count_nodes_by_type,
+    find_dangling_edges,
+    find_unsupported_nodes,
+)
 from crossmodalrag.retrieve.hybrid import DEFAULT_PROFILE, PROFILE_WEIGHTS, retrieve
 from crossmodalrag.sample_data import default_sample_db_path, seed_sample_data
 
@@ -243,6 +250,36 @@ def eval_generation_cmd(
             print(f"  - {query_text}")
 
 
+def memory_stats_cmd() -> None:
+    db_path = get_db_path()
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        by_level = count_nodes_by_level(conn)
+        by_type = count_nodes_by_type(conn)
+        edges = count_edges(conn)
+        unsupported = find_unsupported_nodes(conn)
+        dangling = find_dangling_edges(conn)
+    finally:
+        conn.close()
+
+    total_nodes = sum(by_level.values())
+    print(f"Memory DB: {db_path}")
+    print(f"Memory nodes (L1-L3): {total_nodes}")
+    for level in (1, 2, 3):
+        print(f"  L{level}: {by_level.get(level, 0)}")
+    if by_type:
+        print("By type: " + ", ".join(f"{name}={count}" for name, count in by_type.items()))
+    print(f"Memory edges: {edges}")
+    print("Integrity:")
+    print(f"  unsupported nodes (no L0 evidence): {len(unsupported)}")
+    print(f"  dangling edges (missing endpoint): {len(dangling)}")
+    if unsupported:
+        print(f"  unsupported node ids: {unsupported}")
+    if dangling:
+        print(f"  dangling edge ids: {dangling}")
+
+
 def seed_sample_cmd(
     workspace_dir: Path,
     force: bool = False,
@@ -379,6 +416,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM model id (defaults to CMRAG_LLM_MODEL).",
     )
 
+    sub.add_parser(
+        "memory-stats",
+        help="Show hierarchical memory node/edge counts and structural integrity status.",
+    )
+
     p_seed = sub.add_parser(
         "seed-sample",
         help="Create deterministic synthetic notes/git fixtures and ingest them into the DB.",
@@ -468,6 +510,9 @@ def main() -> None:
             profile=args.profile,
             model=args.model,
         )
+        return
+    if args.command == "memory-stats":
+        memory_stats_cmd()
         return
     if args.command == "seed-sample":
         seed_sample_cmd(args.workspace_dir, force=args.force, db_path=args.db_path)
