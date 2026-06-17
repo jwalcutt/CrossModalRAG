@@ -8,6 +8,8 @@ Current scope:
 - Create structure-aware searchable chunks from evidence.
 - Query with a hybrid (semantic vector + lexical + recency) retriever and get cited evidence.
 - Optional local embeddings via `fastembed` (no torch); falls back to lexical when not installed.
+- Synthesize grounded answers with a local LLM (Ollama) constrained to and citing the evidence,
+  abstaining when evidence is weak; falls back to a deterministic template when Ollama is absent.
 
 ## Quickstart
 
@@ -115,14 +117,22 @@ means you should re-run this command.
 mem ask "Why did I change the parser?" --top-k 5 --profile relevant --explain
 ```
 
-`--profile` selects the hybrid blend of semantic / lexical / recency signals:
+By default `mem ask` synthesizes a grounded answer with a local LLM via Ollama, constrained to
+the retrieved evidence and citing it inline as `[E#]`. If retrieval is too weak (top score below
+`CMRAG_MIN_EVIDENCE_SCORE`) it abstains instead of guessing. If Ollama is unreachable it
+automatically falls back to the deterministic evidence template.
 
-- `balanced` (default): 0.55 vector + 0.30 lexical + 0.15 recency
-- `relevant`: 0.70 vector + 0.25 lexical + 0.05 recency
-- `recent`: 0.35 vector + 0.20 lexical + 0.45 recency
+Requires [Ollama](https://ollama.com) running locally with a model pulled
+(`ollama pull gemma4`). Swap models anytime via `CMRAG_LLM_MODEL`.
 
-`--explain` prints the per-hit score components. When no embeddings are available, retrieval
-falls back to lexical + recency automatically.
+- `--profile` selects the hybrid retrieval blend of semantic / lexical / recency:
+  - `balanced` (default): 0.55 vector + 0.30 lexical + 0.15 recency
+  - `relevant`: 0.70 vector + 0.25 lexical + 0.05 recency
+  - `recent`: 0.35 vector + 0.20 lexical + 0.45 recency
+- `--explain` prints per-hit score components.
+- `--no-llm` skips synthesis and returns the deterministic evidence template.
+- `--json` emits a structured answer (stable contract for UIs).
+- `--debug` adds retrieval diagnostics plus the raw prompt and model output.
 
 7. Run retrieval evaluation (using seeded sample queries or your own `queries_eval` rows):
 
@@ -130,14 +140,26 @@ falls back to lexical + recency automatically.
 mem eval --top-k 5 --profile relevant
 ```
 
+8. Evaluate grounded answer quality (citation faithfulness, requires Ollama):
+
+```bash
+mem eval-generation --query-prefix "[sample]" --profile relevant
+```
+
+This reports `citation_validity` (no hallucinated `[E#]`), `source_grounding_hit` (cites an
+expected source), and `abstention_correct` (answers answerable queries, abstains on
+unanswerable ones). Queries with empty `expected_source_uris` are treated as negative
+(should-abstain) cases. Swap `CMRAG_LLM_MODEL` to compare models.
+
 ## CLI Commands
 
 - `mem init-db`
 - `mem seed-sample [--workspace-dir PATH] [--force]`
 - `mem ingest-notes [<vault_path> ...]` (falls back to `.env` `OBSIDIAN_VAULT_PATH_*`)
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
-- `mem ask "<query>" [--top-k N] [--profile balanced|relevant|recent] [--explain]`
+- `mem ask "<query>" [--top-k N] [--profile balanced|relevant|recent] [--explain] [--no-llm] [--json] [--debug]`
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...]`
+- `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
 
 ## Synthetic Sample Seed Workflow
@@ -176,6 +198,18 @@ Select the embedding model (defaults to `BAAI/bge-small-en-v1.5`, 384-dim):
 ```bash
 export CMRAG_EMBED_MODEL=BAAI/bge-small-en-v1.5
 ```
+
+Configure the local LLM used for answer synthesis (defaults shown):
+
+```bash
+export CMRAG_LLM_PROVIDER=ollama
+export CMRAG_LLM_MODEL=gemma4              # swap for any model you have in `ollama list`
+export CMRAG_LLM_BASE_URL=http://localhost:11434
+export CMRAG_LLM_TIMEOUT=120
+export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval score
+```
+
+See `.env.example` for the full list of supported variables.
 
 ## Evaluation Query File Format (`mem eval --load-queries`)
 

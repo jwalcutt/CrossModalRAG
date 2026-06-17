@@ -185,6 +185,12 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
             "[sample] What issue was noted in the retrieval smoke test retro?",
             json.dumps([note_retro_uri]),
         ),
+        (
+            # Negative case: nothing in the sample corpus answers this, so a
+            # grounded system should abstain. Used by generation eval.
+            "[sample] What were the quarterly revenue figures for the Tokyo office?",
+            json.dumps([]),
+        ),
     ]
     for query_text, expected_source_uris in rows:
         existing = conn.execute(

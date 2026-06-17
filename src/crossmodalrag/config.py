@@ -27,6 +27,34 @@ def get_db_path() -> Path:
     return Path.cwd() / "data" / "memory.db"
 
 
+def get_llm_provider_name() -> str:
+    return os.getenv("CMRAG_LLM_PROVIDER", "ollama").strip() or "ollama"
+
+
+def get_llm_model() -> str:
+    return os.getenv("CMRAG_LLM_MODEL", "gemma4").strip() or "gemma4"
+
+
+def get_llm_base_url() -> str:
+    return os.getenv("CMRAG_LLM_BASE_URL", "http://localhost:11434").strip().rstrip("/")
+
+
+def get_llm_timeout() -> float:
+    raw = os.getenv("CMRAG_LLM_TIMEOUT", "120").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return 120.0
+
+
+def get_min_evidence_score() -> float:
+    raw = os.getenv("CMRAG_MIN_EVIDENCE_SCORE", "0.15").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.15
+
+
 def get_numbered_env_paths(prefix: str) -> list[Path]:
     pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)$")
     indexed: list[tuple[int, Path]] = []

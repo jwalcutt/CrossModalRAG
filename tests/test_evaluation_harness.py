@@ -17,9 +17,11 @@ def test_run_eval_computes_metrics_for_seeded_sample_queries(tmp_path: Path) -> 
     try:
         init_db(conn)
         seed_result = seed_sample_data(conn, workspace_dir=workspace_dir)
-        assert seed_result.eval_queries_upserted == 3
+        assert seed_result.eval_queries_upserted == 4
 
         summary = run_eval(conn, top_k=5, query_prefix="[sample]")
+        # The 4th seeded query is a negative (abstain) case with no gold sources,
+        # which retrieval eval skips; the 3 answerable queries are scored.
         assert summary.query_count == 3
         assert summary.top_k == 5
         assert 0.0 <= summary.recall_at_k <= 1.0

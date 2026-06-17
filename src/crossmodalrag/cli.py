@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 from pathlib import Path
 
 from crossmodalrag.config import get_db_path, get_numbered_env_paths, load_dotenv
@@ -13,7 +15,14 @@ from crossmodalrag.embed.provider import (
 )
 from crossmodalrag.embed.store import count_embeddings, embed_pending_chunks
 from crossmodalrag.evaluation import load_eval_queries_file, run_eval, upsert_eval_queries
-from crossmodalrag.generate.answer import format_grounded_answer
+from crossmodalrag.generate.answer import (
+    format_generated_answer,
+    format_grounded_answer,
+    generated_answer_to_dict,
+)
+from crossmodalrag.generate.provider import LLMUnavailable, get_default_llm_provider
+from crossmodalrag.generate.synthesize import synthesize_answer
+from crossmodalrag.generation_eval import run_generation_eval
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
 from crossmodalrag.retrieve.hybrid import DEFAULT_PROFILE, PROFILE_WEIGHTS, retrieve
@@ -71,14 +80,68 @@ def ingest_git_cmd(repo_paths: list[Path], max_commits: int = 300) -> None:
     )
 
 
-def ask_cmd(query: str, top_k: int = 5, profile: str = DEFAULT_PROFILE, explain: bool = False) -> None:
+def ask_cmd(
+    query: str,
+    top_k: int = 5,
+    profile: str = DEFAULT_PROFILE,
+    explain: bool = False,
+    use_llm: bool = True,
+    as_json: bool = False,
+    debug: bool = False,
+) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
     try:
         hits = retrieve(conn, query=query, top_k=top_k, profile=profile)
     finally:
         conn.close()
-    print(format_grounded_answer(query, hits, explain=explain))
+
+    provider = get_default_llm_provider() if use_llm else None
+    if provider is not None:
+        try:
+            gen = synthesize_answer(query, hits, provider)
+        except LLMUnavailable as exc:
+            print(f"[notice] LLM unavailable, falling back to evidence template: {exc}", file=sys.stderr)
+            provider = None
+        else:
+            if as_json:
+                print(json.dumps(generated_answer_to_dict(gen), indent=2))
+            else:
+                print(format_generated_answer(gen, explain=explain, debug=debug))
+            return
+
+    # No LLM (disabled or unavailable): deterministic evidence template.
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "query": query,
+                    "model": None,
+                    "abstained": not hits,
+                    "answer": None,
+                    "evidence": [
+                        {
+                            "evidence_id": f"E{i}",
+                            "source_id": hit.source_id,
+                            "chunk_id": hit.chunk_id,
+                            "source_type": hit.source_type,
+                            "source_uri": hit.source_uri,
+                            "title": hit.title,
+                            "scores": {
+                                "combined": hit.score,
+                                "vector": hit.vector_score,
+                                "lexical": hit.lexical_score,
+                                "recency": hit.recency_score,
+                            },
+                        }
+                        for i, hit in enumerate(hits, start=1)
+                    ],
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(format_grounded_answer(query, hits, explain=explain or debug))
 
 
 def eval_cmd(
@@ -136,6 +199,48 @@ def reindex_embeddings_cmd(batch_size: int = 64, model: str | None = None) -> No
     print(f"Model: {provider.name} (dim={provider.dim})")
     print(f"Chunks embedded this run: {embedded}")
     print(f"Total chunks with current-model embeddings: {total}")
+
+
+def eval_generation_cmd(
+    top_k: int = 5,
+    query_prefix: str | None = None,
+    profile: str = DEFAULT_PROFILE,
+    model: str | None = None,
+) -> None:
+    db_path = get_db_path()
+    provider = get_default_llm_provider()
+    if provider is None:
+        raise SystemExit("No LLM provider configured (set CMRAG_LLM_PROVIDER).")
+    if model:
+        provider.name = model
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        try:
+            summary = run_generation_eval(
+                conn, provider, top_k=top_k, query_prefix=query_prefix, profile=profile
+            )
+        except LLMUnavailable as exc:
+            raise SystemExit(str(exc))
+    finally:
+        conn.close()
+
+    print(f"Evaluation DB: {db_path}")
+    print(f"Model: {summary.model} | profile: {summary.profile}")
+    if query_prefix:
+        print(f"Query prefix filter: {query_prefix}")
+    if summary.query_count == 0:
+        print("No evaluation queries found. Load queries into 'queries_eval' and run again.")
+        return
+    print(f"Queries evaluated: {summary.query_count}")
+    print(f"Citation validity: {summary.citation_validity:.3f}")
+    print(f"Source-grounding hit: {summary.source_grounding_hit:.3f}")
+    print(f"Abstention correct: {summary.abstention_correct:.3f}")
+    bad = [r.query_text for r in summary.results if not r.abstention_correct or not r.citation_valid]
+    if bad:
+        print(f"Queries with citation/abstention issues ({len(bad)}):")
+        for query_text in bad:
+            print(f"  - {query_text}")
 
 
 def seed_sample_cmd(
@@ -197,6 +302,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show per-hit score components (vector/lexical/recency/combined).",
     )
+    p_ask.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Skip LLM synthesis; return the deterministic evidence template.",
+    )
+    p_ask.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit a structured JSON answer (stable contract for UIs).",
+    )
+    p_ask.add_argument(
+        "--debug",
+        action="store_true",
+        help="Include retrieval diagnostics, the raw prompt, and raw model output.",
+    )
 
     p_eval = sub.add_parser(
         "eval",
@@ -232,6 +353,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help=f"Embedding model id (defaults to CMRAG_EMBED_MODEL or {DEFAULT_EMBED_MODEL}).",
+    )
+
+    p_eval_gen = sub.add_parser(
+        "eval-generation",
+        help="Evaluate grounded answer synthesis (citation validity, source grounding, abstention).",
+    )
+    p_eval_gen.add_argument("--top-k", type=int, default=5)
+    p_eval_gen.add_argument(
+        "--query-prefix",
+        type=str,
+        default=None,
+        help="Only evaluate queries whose text starts with this prefix (e.g. '[sample]').",
+    )
+    p_eval_gen.add_argument(
+        "--profile",
+        choices=profile_choices,
+        default=DEFAULT_PROFILE,
+        help="Hybrid retrieval profile (vector/lexical/recency blend).",
+    )
+    p_eval_gen.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="LLM model id (defaults to CMRAG_LLM_MODEL).",
     )
 
     p_seed = sub.add_parser(
@@ -295,7 +440,15 @@ def main() -> None:
         ingest_git_cmd(repo_paths, max_commits=args.max_commits)
         return
     if args.command == "ask":
-        ask_cmd(args.query, top_k=args.top_k, profile=args.profile, explain=args.explain)
+        ask_cmd(
+            args.query,
+            top_k=args.top_k,
+            profile=args.profile,
+            explain=args.explain,
+            use_llm=not args.no_llm,
+            as_json=args.as_json,
+            debug=args.debug,
+        )
         return
     if args.command == "eval":
         eval_cmd(
@@ -307,6 +460,14 @@ def main() -> None:
         return
     if args.command == "reindex-embeddings":
         reindex_embeddings_cmd(batch_size=args.batch_size, model=args.model)
+        return
+    if args.command == "eval-generation":
+        eval_generation_cmd(
+            top_k=args.top_k,
+            query_prefix=args.query_prefix,
+            profile=args.profile,
+            model=args.model,
+        )
         return
     if args.command == "seed-sample":
         seed_sample_cmd(args.workspace_dir, force=args.force, db_path=args.db_path)

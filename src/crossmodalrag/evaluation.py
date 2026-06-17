@@ -45,6 +45,10 @@ def run_eval(
     queries = list_eval_queries(conn, query_prefix=query_prefix)
     results: list[EvalQueryResult] = []
     for query in queries:
+        # Retrieval metrics need gold sources; abstain-only (negative) cases
+        # carry no expected URIs and are evaluated by generation eval instead.
+        if not query.expected_source_uris:
+            continue
         hits = retrieve(conn, query=query.query_text, top_k=top_k, profile=profile)
         retrieved_source_uris = _unique_source_uris_in_order([hit.source_uri for hit in hits])
         first_correct_rank = _first_correct_rank(retrieved_source_uris, set(query.expected_source_uris))
