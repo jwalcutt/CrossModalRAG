@@ -24,6 +24,7 @@ class RetrievalHit:
     score: float
     lexical_score: float
     recency_score: float
+    vector_score: float = 0.0
 
 
 def retrieve(conn: sqlite3.Connection, query: str, top_k: int = 5) -> list[RetrievalHit]:

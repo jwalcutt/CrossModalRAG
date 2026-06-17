@@ -5,11 +5,18 @@ from pathlib import Path
 
 from crossmodalrag.config import get_db_path, get_numbered_env_paths, load_dotenv
 from crossmodalrag.db import connect, init_db
+from crossmodalrag.embed.provider import (
+    DEFAULT_EMBED_MODEL,
+    MissingEmbeddingBackend,
+    get_default_provider,
+    require_default_provider,
+)
+from crossmodalrag.embed.store import count_embeddings, embed_pending_chunks
 from crossmodalrag.evaluation import load_eval_queries_file, run_eval, upsert_eval_queries
 from crossmodalrag.generate.answer import format_grounded_answer
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
-from crossmodalrag.retrieve.lexical import retrieve
+from crossmodalrag.retrieve.hybrid import DEFAULT_PROFILE, PROFILE_WEIGHTS, retrieve
 from crossmodalrag.sample_data import default_sample_db_path, seed_sample_data
 
 def init_db_cmd() -> None:
@@ -25,11 +32,12 @@ def init_db_cmd() -> None:
 def ingest_notes_cmd(vault_paths: list[Path]) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
+    embedder = get_default_provider()
     try:
         init_db(conn)
         total_inserted = 0
         for vault_path in vault_paths:
-            inserted = ingest_notes(conn, vault_path=vault_path)
+            inserted = ingest_notes(conn, vault_path=vault_path, embedder=embedder)
             total_inserted += inserted
             print(f"Ingested notes from {vault_path} into {db_path}. Inserted chunks: {inserted}")
     finally:
@@ -43,11 +51,14 @@ def ingest_notes_cmd(vault_paths: list[Path]) -> None:
 def ingest_git_cmd(repo_paths: list[Path], max_commits: int = 300) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
+    embedder = get_default_provider()
     try:
         init_db(conn)
         total_inserted = 0
         for repo_path in repo_paths:
-            inserted = ingest_git(conn, repo_path=repo_path, max_commits=max_commits)
+            inserted = ingest_git(
+                conn, repo_path=repo_path, max_commits=max_commits, embedder=embedder
+            )
             total_inserted += inserted
             print(
                 f"Ingested git history from {repo_path} into {db_path}. Inserted chunks: {inserted}"
@@ -60,20 +71,21 @@ def ingest_git_cmd(repo_paths: list[Path], max_commits: int = 300) -> None:
     )
 
 
-def ask_cmd(query: str, top_k: int = 5) -> None:
+def ask_cmd(query: str, top_k: int = 5, profile: str = DEFAULT_PROFILE, explain: bool = False) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
     try:
-        hits = retrieve(conn, query=query, top_k=top_k)
+        hits = retrieve(conn, query=query, top_k=top_k, profile=profile)
     finally:
         conn.close()
-    print(format_grounded_answer(query, hits))
+    print(format_grounded_answer(query, hits, explain=explain))
 
 
 def eval_cmd(
     top_k: int = 5,
     query_prefix: str | None = None,
     load_queries_path: Path | None = None,
+    profile: str = DEFAULT_PROFILE,
 ) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
@@ -83,11 +95,12 @@ def eval_cmd(
         if load_queries_path is not None:
             queries = load_eval_queries_file(load_queries_path)
             loaded = upsert_eval_queries(conn, queries)
-        summary = run_eval(conn, top_k=top_k, query_prefix=query_prefix)
+        summary = run_eval(conn, top_k=top_k, query_prefix=query_prefix, profile=profile)
     finally:
         conn.close()
 
     print(f"Evaluation DB: {db_path}")
+    print(f"Retrieval profile: {profile}")
     if load_queries_path is not None:
         print(f"Eval queries loaded/upserted: {loaded} from {load_queries_path}")
     if query_prefix:
@@ -99,6 +112,30 @@ def eval_cmd(
     print(f"Recall@{summary.top_k}: {summary.recall_at_k:.3f}")
     print(f"MRR@{summary.top_k}: {summary.mrr_at_k:.3f}")
     print(f"Citation hit-rate (top-1): {summary.citation_hit_rate:.3f}")
+    misses = [r.query_text for r in summary.results if r.first_correct_rank is None]
+    if misses:
+        print(f"Queries with no correct hit in top-{summary.top_k} ({len(misses)}):")
+        for query_text in misses:
+            print(f"  - {query_text}")
+
+
+def reindex_embeddings_cmd(batch_size: int = 64, model: str | None = None) -> None:
+    db_path = get_db_path()
+    try:
+        provider = require_default_provider(model)
+    except MissingEmbeddingBackend as exc:
+        raise SystemExit(str(exc))
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        embedded = embed_pending_chunks(conn, provider, batch_size=batch_size)
+        total = count_embeddings(conn, model=provider.name)
+    finally:
+        conn.close()
+    print(f"Reindex DB: {db_path}")
+    print(f"Model: {provider.name} (dim={provider.dim})")
+    print(f"Chunks embedded this run: {embedded}")
+    print(f"Total chunks with current-model embeddings: {total}")
 
 
 def seed_sample_cmd(
@@ -144,9 +181,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_git.add_argument("repo_paths", nargs="*", type=Path)
     p_git.add_argument("--max-commits", type=int, default=300)
 
+    profile_choices = sorted(PROFILE_WEIGHTS)
+
     p_ask = sub.add_parser("ask", help="Query indexed evidence.")
     p_ask.add_argument("query", type=str)
     p_ask.add_argument("--top-k", type=int, default=5)
+    p_ask.add_argument(
+        "--profile",
+        choices=profile_choices,
+        default=DEFAULT_PROFILE,
+        help="Hybrid retrieval profile (vector/lexical/recency blend).",
+    )
+    p_ask.add_argument(
+        "--explain",
+        action="store_true",
+        help="Show per-hit score components (vector/lexical/recency/combined).",
+    )
 
     p_eval = sub.add_parser(
         "eval",
@@ -164,6 +214,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="JSON file of eval query rows to upsert before running evaluation.",
+    )
+    p_eval.add_argument(
+        "--profile",
+        choices=profile_choices,
+        default=DEFAULT_PROFILE,
+        help="Hybrid retrieval profile (vector/lexical/recency blend).",
+    )
+
+    p_reindex = sub.add_parser(
+        "reindex-embeddings",
+        help="Backfill/repair chunk embeddings for the active model (requires the 'embeddings' extra).",
+    )
+    p_reindex.add_argument("--batch-size", type=int, default=64)
+    p_reindex.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help=f"Embedding model id (defaults to CMRAG_EMBED_MODEL or {DEFAULT_EMBED_MODEL}).",
     )
 
     p_seed = sub.add_parser(
@@ -227,10 +295,18 @@ def main() -> None:
         ingest_git_cmd(repo_paths, max_commits=args.max_commits)
         return
     if args.command == "ask":
-        ask_cmd(args.query, top_k=args.top_k)
+        ask_cmd(args.query, top_k=args.top_k, profile=args.profile, explain=args.explain)
         return
     if args.command == "eval":
-        eval_cmd(top_k=args.top_k, query_prefix=args.query_prefix, load_queries_path=args.load_queries)
+        eval_cmd(
+            top_k=args.top_k,
+            query_prefix=args.query_prefix,
+            load_queries_path=args.load_queries,
+            profile=args.profile,
+        )
+        return
+    if args.command == "reindex-embeddings":
+        reindex_embeddings_cmd(batch_size=args.batch_size, model=args.model)
         return
     if args.command == "seed-sample":
         seed_sample_cmd(args.workspace_dir, force=args.force, db_path=args.db_path)

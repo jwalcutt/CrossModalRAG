@@ -3,7 +3,7 @@ from __future__ import annotations
 from crossmodalrag.retrieve.lexical import RetrievalHit
 
 
-def format_grounded_answer(query: str, hits: list[RetrievalHit]) -> str:
+def format_grounded_answer(query: str, hits: list[RetrievalHit], explain: bool = False) -> str:
     if not hits:
         return (
             f'Query: "{query}"\n'
@@ -25,6 +25,13 @@ def format_grounded_answer(query: str, hits: list[RetrievalHit]) -> str:
         lines.append(
             f"   Evidence: source_id={hit.source_id}, chunk_id={hit.chunk_id}, uri={hit.source_uri}"
         )
+        if explain:
+            lines.append(
+                f"   Scores: combined={hit.score:.3f} "
+                f"vector={hit.vector_score:.3f} "
+                f"lexical={hit.lexical_score:.3f} "
+                f"recency={hit.recency_score:.3f}"
+            )
         lines.append(f"   Excerpt: {preview}")
     return "\n".join(lines)
 

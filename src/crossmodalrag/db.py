@@ -30,6 +30,17 @@ CREATE TABLE IF NOT EXISTS evidence_chunks (
 
 CREATE INDEX IF NOT EXISTS idx_evidence_source_id ON evidence_chunks(source_id);
 
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+    chunk_id INTEGER PRIMARY KEY,
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(chunk_id) REFERENCES evidence_chunks(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model ON chunk_embeddings(model);
+
 CREATE TABLE IF NOT EXISTS queries_eval (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     query_text TEXT NOT NULL,

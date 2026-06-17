@@ -7,9 +7,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from crossmodalrag.chunking import chunk_markdown
+from crossmodalrag.embed.provider import EmbeddingProvider
+from crossmodalrag.ingest._embed import embed_source_chunks, purge_source_embeddings
 
 
-def ingest_notes(conn: sqlite3.Connection, vault_path: Path) -> int:
+def ingest_notes(
+    conn: sqlite3.Connection,
+    vault_path: Path,
+    embedder: EmbeddingProvider | None = None,
+) -> int:
     if not vault_path.exists():
         raise FileNotFoundError(f"Vault path does not exist: {vault_path}")
     inserted_chunks = 0
@@ -32,16 +38,20 @@ def ingest_notes(conn: sqlite3.Connection, vault_path: Path) -> int:
         if unchanged:
             continue
 
+        purge_source_embeddings(conn, source_id)
         conn.execute("DELETE FROM evidence_chunks WHERE source_id = ?", (source_id,))
+        new_chunks: list[tuple[int, str]] = []
         for idx, chunk in enumerate(chunk_markdown(text)):
-            conn.execute(
+            cur = conn.execute(
                 """
                 INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text, metadata_json)
                 VALUES (?, ?, ?, ?)
                 """,
                 (source_id, idx, chunk, json.dumps({"modality": "text", "source_type": "note"})),
             )
+            new_chunks.append((int(cur.lastrowid), chunk))
             inserted_chunks += 1
+        embed_source_chunks(conn, embedder, new_chunks)
     conn.commit()
     return inserted_chunks
 

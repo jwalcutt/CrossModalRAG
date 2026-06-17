@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 
 from crossmodalrag.chunking import chunk_diff
+from crossmodalrag.embed.provider import EmbeddingProvider
+from crossmodalrag.ingest._embed import embed_source_chunks, purge_source_embeddings
 
 
 def ingest_git(
@@ -16,6 +18,7 @@ def ingest_git(
     max_commits: int = 300,
     target_author_name: str | None = None,
     target_author_email: str | None = None,
+    embedder: EmbeddingProvider | None = None,
 ) -> int:
     if not (repo_path / ".git").exists():
         raise FileNotFoundError(f"Not a git repository: {repo_path}")
@@ -51,9 +54,11 @@ def ingest_git(
         if unchanged:
             continue
 
+        purge_source_embeddings(conn, source_id)
         conn.execute("DELETE FROM evidence_chunks WHERE source_id = ?", (source_id,))
+        new_chunks: list[tuple[int, str]] = []
         for idx, chunk in enumerate(chunk_diff(combined, max_chars=1400, overlap=180)):
-            conn.execute(
+            cur = conn.execute(
                 """
                 INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text, metadata_json)
                 VALUES (?, ?, ?, ?)
@@ -73,7 +78,9 @@ def ingest_git(
                     ),
                 ),
             )
+            new_chunks.append((int(cur.lastrowid), chunk))
             inserted_chunks += 1
+        embed_source_chunks(conn, embedder, new_chunks)
     conn.commit()
     return inserted_chunks
 

@@ -5,7 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from crossmodalrag.retrieve.lexical import retrieve
+from crossmodalrag.retrieve.hybrid import DEFAULT_PROFILE, retrieve
 
 
 @dataclass(frozen=True)
@@ -40,11 +40,12 @@ def run_eval(
     *,
     top_k: int = 5,
     query_prefix: str | None = None,
+    profile: str = DEFAULT_PROFILE,
 ) -> EvalSummary:
     queries = list_eval_queries(conn, query_prefix=query_prefix)
     results: list[EvalQueryResult] = []
     for query in queries:
-        hits = retrieve(conn, query=query.query_text, top_k=top_k)
+        hits = retrieve(conn, query=query.query_text, top_k=top_k, profile=profile)
         retrieved_source_uris = _unique_source_uris_in_order([hit.source_uri for hit in hits])
         first_correct_rank = _first_correct_rank(retrieved_source_uris, set(query.expected_source_uris))
         results.append(

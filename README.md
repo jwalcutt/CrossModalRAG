@@ -5,8 +5,9 @@ This repository contains a local-first foundation for a cross-modal memory syste
 Current scope:
 - Ingest markdown notes into SQLite.
 - Ingest git commits and diffs into SQLite.
-- Create searchable chunks from evidence.
-- Query with a simple lexical retriever and get cited evidence.
+- Create structure-aware searchable chunks from evidence.
+- Query with a hybrid (semantic vector + lexical + recency) retriever and get cited evidence.
+- Optional local embeddings via `fastembed` (no torch); falls back to lexical when not installed.
 
 ## Quickstart
 
@@ -16,6 +17,13 @@ Current scope:
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
+```
+
+For semantic (vector) retrieval, install the optional embeddings extra. The core stays
+dependency-free; without this extra everything still works using lexical retrieval only.
+
+```bash
+pip install -e ".[embeddings]"   # adds fastembed (ONNX, local, no torch) + numpy
 ```
 
 2. Initialize the local database:
@@ -89,16 +97,37 @@ Note: a full rebuild also clears the `queries_eval` table. If you have custom ev
 queries, re-add them with `mem eval --load-queries file.json` (see the query file format below)
 after re-ingesting.
 
-5. Ask a question:
+5. (Optional) Build semantic embeddings for ingested chunks:
 
 ```bash
-mem ask "Why did I change the parser?" --top-k 5
+mem reindex-embeddings
 ```
 
-6. Run retrieval evaluation (using seeded sample queries or your own `queries_eval` rows):
+This embeds any chunks that don't yet have a vector for the active model (resumable and
+idempotent). It requires the `[embeddings]` extra. Ingestion also embeds inline when the extra
+is installed, so `reindex-embeddings` is mainly for backfilling existing data or after changing
+the model. Vectors are tagged with the model that produced them; changing `CMRAG_EMBED_MODEL`
+means you should re-run this command.
+
+6. Ask a question:
 
 ```bash
-mem eval --top-k 5
+mem ask "Why did I change the parser?" --top-k 5 --profile relevant --explain
+```
+
+`--profile` selects the hybrid blend of semantic / lexical / recency signals:
+
+- `balanced` (default): 0.55 vector + 0.30 lexical + 0.15 recency
+- `relevant`: 0.70 vector + 0.25 lexical + 0.05 recency
+- `recent`: 0.35 vector + 0.20 lexical + 0.45 recency
+
+`--explain` prints the per-hit score components. When no embeddings are available, retrieval
+falls back to lexical + recency automatically.
+
+7. Run retrieval evaluation (using seeded sample queries or your own `queries_eval` rows):
+
+```bash
+mem eval --top-k 5 --profile relevant
 ```
 
 ## CLI Commands
@@ -107,8 +136,9 @@ mem eval --top-k 5
 - `mem seed-sample [--workspace-dir PATH] [--force]`
 - `mem ingest-notes [<vault_path> ...]` (falls back to `.env` `OBSIDIAN_VAULT_PATH_*`)
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
-- `mem ask "<query>" [--top-k N]`
-- `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json]`
+- `mem ask "<query>" [--top-k N] [--profile balanced|relevant|recent] [--explain]`
+- `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...]`
+- `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
 
 ## Synthetic Sample Seed Workflow
 
@@ -139,6 +169,12 @@ Set `CMRAG_DB_PATH` to override:
 
 ```bash
 export CMRAG_DB_PATH=/absolute/path/to/memory.db
+```
+
+Select the embedding model (defaults to `BAAI/bge-small-en-v1.5`, 384-dim):
+
+```bash
+export CMRAG_EMBED_MODEL=BAAI/bge-small-en-v1.5
 ```
 
 ## Evaluation Query File Format (`mem eval --load-queries`)
