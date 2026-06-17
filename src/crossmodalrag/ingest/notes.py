@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from crossmodalrag.chunking import chunk_text
+from crossmodalrag.chunking import chunk_markdown
 
 
 def ingest_notes(conn: sqlite3.Connection, vault_path: Path) -> int:
@@ -33,7 +33,7 @@ def ingest_notes(conn: sqlite3.Connection, vault_path: Path) -> int:
             continue
 
         conn.execute("DELETE FROM evidence_chunks WHERE source_id = ?", (source_id,))
-        for idx, chunk in enumerate(chunk_text(text)):
+        for idx, chunk in enumerate(chunk_markdown(text)):
             conn.execute(
                 """
                 INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text, metadata_json)

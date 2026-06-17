@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
-from crossmodalrag.chunking import chunk_text
+from crossmodalrag.chunking import chunk_diff
 
 
 def ingest_git(
@@ -52,7 +52,7 @@ def ingest_git(
             continue
 
         conn.execute("DELETE FROM evidence_chunks WHERE source_id = ?", (source_id,))
-        for idx, chunk in enumerate(chunk_text(combined, max_chars=1400, overlap=180)):
+        for idx, chunk in enumerate(chunk_diff(combined, max_chars=1400, overlap=180)):
             conn.execute(
                 """
                 INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text, metadata_json)

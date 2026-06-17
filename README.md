@@ -58,6 +58,37 @@ mem ingest-git /path/to/repo-a /path/to/repo-b --max-commits 300
 
 If you omit paths, `mem ingest-git` will use all `REPO_PATH_<n>` values from your local `.env`.
 
+### Forcing a re-chunk (after chunker changes)
+
+Ingestion is idempotent: a source whose content fingerprint is unchanged is skipped, and its
+existing chunks are left untouched. This means improvements to the chunking logic do **not**
+apply to already-ingested sources until their content changes.
+
+There is currently no in-place `--force` flag on the ingest commands. To re-chunk existing
+data with the latest chunkers, rebuild the database from scratch:
+
+```bash
+# Rebuild the default ./data/memory.db in place
+rm -f ./data/memory.db ./data/memory.db-wal ./data/memory.db-shm
+mem init-db
+mem ingest-notes   # explicit paths, or OBSIDIAN_VAULT_PATH_* from .env
+mem ingest-git     # explicit paths, or REPO_PATH_* from .env
+```
+
+To rebuild into a separate database without disturbing your current one, point `CMRAG_DB_PATH`
+at a fresh path first, then ingest there and compare before swapping:
+
+```bash
+export CMRAG_DB_PATH=/absolute/path/to/memory-rechunked.db
+mem init-db
+mem ingest-notes
+mem ingest-git
+```
+
+Note: a full rebuild also clears the `queries_eval` table. If you have custom evaluation
+queries, re-add them with `mem eval --load-queries file.json` (see the query file format below)
+after re-ingesting.
+
 5. Ask a question:
 
 ```bash
