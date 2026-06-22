@@ -96,3 +96,101 @@ def embed_pending_chunks(
             embedded += 1
         conn.commit()
     return embedded
+
+
+def upsert_node_embedding(
+    conn: sqlite3.Connection,
+    node_id: int,
+    model: str,
+    dim: int,
+    vector_bytes: bytes,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO node_embeddings (node_id, model, dim, vector)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(node_id) DO UPDATE SET
+            model = excluded.model,
+            dim = excluded.dim,
+            vector = excluded.vector,
+            created_at = CURRENT_TIMESTAMP
+        """,
+        (node_id, model, dim, vector_bytes),
+    )
+
+
+def count_node_embeddings(conn: sqlite3.Connection, model: str | None = None) -> int:
+    if model is None:
+        row = conn.execute("SELECT COUNT(*) AS n FROM node_embeddings").fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM node_embeddings WHERE model = ?", (model,)
+        ).fetchone()
+    return int(row["n"])
+
+
+def embed_pending_nodes(
+    conn: sqlite3.Connection,
+    provider: "EmbeddingProvider",
+    *,
+    level: int,
+    node_type: str,
+    batch_size: int = 64,
+) -> int:
+    """Embed memory_nodes (title + content) lacking a current-model vector.
+
+    Mirrors ``embed_pending_chunks``: resumable and model-aware. Returns the
+    number of nodes embedded this run.
+    """
+    rows = conn.execute(
+        """
+        SELECT n.id AS node_id, n.title AS title, n.content AS content
+        FROM memory_nodes n
+        LEFT JOIN node_embeddings e ON e.node_id = n.id
+        WHERE n.level = ? AND n.node_type = ? AND (e.node_id IS NULL OR e.model != ?)
+        ORDER BY n.id ASC
+        """,
+        (level, node_type, provider.name),
+    ).fetchall()
+
+    embedded = 0
+    for start in range(0, len(rows), batch_size):
+        batch = rows[start : start + batch_size]
+        texts = [_node_text(row) for row in batch]
+        vectors = provider.embed(texts)
+        for row, vector in zip(batch, vectors):
+            upsert_node_embedding(
+                conn,
+                node_id=int(row["node_id"]),
+                model=provider.name,
+                dim=len(vector),
+                vector_bytes=pack_vector(vector),
+            )
+            embedded += 1
+        conn.commit()
+    return embedded
+
+
+def load_node_vectors(
+    conn: sqlite3.Connection,
+    model: str,
+    *,
+    level: int,
+) -> list[tuple[int, list[float]]]:
+    rows = conn.execute(
+        """
+        SELECT e.node_id AS node_id, e.vector AS vector
+        FROM node_embeddings e
+        JOIN memory_nodes n ON n.id = e.node_id
+        WHERE e.model = ? AND n.level = ?
+        ORDER BY e.node_id ASC
+        """,
+        (model, level),
+    ).fetchall()
+    return [(int(row["node_id"]), unpack_vector(row["vector"])) for row in rows]
+
+
+def _node_text(row: sqlite3.Row) -> str:
+    title = str(row["title"] or "")
+    content = str(row["content"] or "")
+    return f"{title}\n{content}".strip()

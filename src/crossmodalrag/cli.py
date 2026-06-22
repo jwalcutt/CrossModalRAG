@@ -18,7 +18,12 @@ from crossmodalrag.embed.provider import (
     get_default_provider,
     require_default_provider,
 )
-from crossmodalrag.embed.store import count_embeddings, embed_pending_chunks
+from crossmodalrag.embed.provider import get_default_provider
+from crossmodalrag.embed.store import (
+    count_embeddings,
+    count_node_embeddings,
+    embed_pending_chunks,
+)
 from crossmodalrag.evaluation import load_eval_queries_file, run_eval, upsert_eval_queries
 from crossmodalrag.generate.answer import (
     format_generated_answer,
@@ -30,6 +35,7 @@ from crossmodalrag.generate.synthesize import synthesize_answer
 from crossmodalrag.generation_eval import run_generation_eval
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
+from crossmodalrag.memory.concepts import build_concepts
 from crossmodalrag.memory.episodes import build_episodes
 from crossmodalrag.memory.extract import extract_pending_sources
 from crossmodalrag.memory.integrity import (
@@ -260,6 +266,7 @@ def eval_generation_cmd(
 def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | None = None) -> None:
     build_events = level in ("event", "all")
     build_eps = level in ("episode", "all")
+    build_concept = level in ("concept", "all")
     db_path = get_db_path()
     conn = connect(db_path)
     try:
@@ -288,6 +295,22 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
             print(f"  Episodes kept (up to date): {episodes.episodes_kept}")
             print(f"  Episodes deleted (stale): {episodes.episodes_deleted}")
             print(f"  Events grouped: {episodes.events_grouped}")
+
+        if build_concept:
+            embed_provider = get_default_provider()
+            if embed_provider is None:
+                raise SystemExit(
+                    "L3 concepts require the embeddings extra. Run: pip install -e \".[embeddings]\""
+                )
+            llm_provider = get_default_llm_provider(model or get_extract_model())
+            concepts = build_concepts(conn, embed_provider, llm_provider)
+            print(f"L3 concepts | embed: {embed_provider.name}")
+            print(f"  Concepts created: {concepts.concepts_created}")
+            print(f"  Concepts kept (up to date): {concepts.concepts_kept}")
+            print(f"  Concepts deleted (stale): {concepts.concepts_deleted}")
+            print(f"  Events clustered: {concepts.events_clustered} (unclustered: {concepts.events_unclustered})")
+            if concepts.concepts_created:
+                print(f"  Named by LLM: {concepts.named_by_llm} | by fallback: {concepts.named_by_fallback}")
     finally:
         conn.close()
     print("Run `mem memory-stats` to inspect node/edge counts and integrity.")
@@ -303,6 +326,7 @@ def memory_stats_cmd() -> None:
         edges = count_edges(conn)
         unsupported = find_unsupported_nodes(conn)
         dangling = find_dangling_edges(conn)
+        node_vectors = count_node_embeddings(conn)
     finally:
         conn.close()
 
@@ -314,6 +338,7 @@ def memory_stats_cmd() -> None:
     if by_type:
         print("By type: " + ", ".join(f"{name}={count}" for name, count in by_type.items()))
     print(f"Memory edges: {edges}")
+    print(f"Node embeddings: {node_vectors}")
     print("Integrity:")
     print(f"  unsupported nodes (no L0 evidence): {len(unsupported)}")
     print(f"  dangling edges (missing endpoint): {len(dangling)}")
@@ -465,9 +490,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_build.add_argument(
         "--level",
-        choices=["event", "episode", "all"],
+        choices=["event", "episode", "concept", "all"],
         default="all",
-        help="Memory level to build: 'event' (LLM), 'episode' (no LLM), or 'all' (default).",
+        help="Memory level to build: 'event' (LLM), 'episode' (no LLM), "
+        "'concept' (embeddings extra; LLM naming optional), or 'all' (default).",
     )
     p_build.add_argument(
         "--limit",

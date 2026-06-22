@@ -162,7 +162,7 @@ unanswerable ones). Queries with empty `expected_source_uris` are treated as neg
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
-- `mem build-memory [--level event|episode|all] [--limit N] [--model ID]` (events require Ollama; episodes don't)
+- `mem build-memory [--level event|episode|concept|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts need the `[embeddings]` extra)
 - `mem memory-stats`
 
 ## Hierarchical Memory (experimental)
@@ -170,27 +170,33 @@ unanswerable ones). Queries with empty `expected_source_uris` are treated as neg
 Beyond flat evidence retrieval, CrossModalRAG can build higher-level memory layers on top of the  
 L0 evidence chunks: L1 atomic events → L2 episodes → L3 concepts . Every higher-level node is traceable down to its L0 evidence.
 
-Currently implemented: the node/edge substrate, **L1 atomic-event extraction**, and **L2 episode
-grouping**. `mem build-memory` derives both:
+Currently implemented: the node/edge substrate plus **L1 atomic-event extraction**, **L2 episode
+grouping**, and **L3 concept clustering**. `mem build-memory` derives all three:
 
 - **L1 events** (requires Ollama): a local LLM extracts atomic events ("what happened": a decision,
   learning, fix, task, or change) from each source, linking each event to its L0 evidence.
 - **L2 episodes** (no LLM): events are grouped into "sessions of related work" by project (git repo
   / note folder) and time gap — a new episode starts when consecutive events in a project are more
-  than `CMRAG_EPISODE_GAP_HOURS` apart (default 24). Each episode links to its member events, and
-  drills down to L0 through them.
+  than `CMRAG_EPISODE_GAP_HOURS` apart (default 24). Each episode links to its member events.
+- **L3 concepts** (requires the `[embeddings]` extra; LLM naming optional): events are clustered by
+  semantic similarity (cosine ≥ `CMRAG_CONCEPT_SIM_THRESHOLD`, default 0.60) into recurring topics
+  that span episodes. Each new concept is named by the local LLM (`CMRAG_EXTRACT_MODEL`, temp 0)
+  with a deterministic fallback when Ollama is unavailable.
+
+Every higher-level node drills down to its L0 evidence through its members.
 
 ```bash
-mem build-memory --limit 50          # build L1 events (up to 50 sources) + L2 episodes
+mem build-memory --limit 50          # build L1 events (up to 50 sources) + L2 episodes + L3 concepts
 mem build-memory --level event       # only L1 events (LLM)
 mem build-memory --level episode     # only L2 episodes (no Ollama needed)
+mem build-memory --level concept     # only L3 concepts (needs the embeddings extra; run reindex-embeddings first)
 mem memory-stats                     # node/edge counts + structural integrity
 ```
 
-Both layers are deterministic and incremental: L1 sources are re-extracted only when content,
-model, or prompt version changes; L2 episodes are reconciled by membership so re-running on
-unchanged data is a no-op. L1 uses `CMRAG_EXTRACT_MODEL` (default `llama3.2`, separate from the
-synthesis model so bulk extraction stays fast); `--model` overrides per run.
+All layers are deterministic and incremental: L1 sources are re-extracted only when content,
+model, or prompt version changes; L2/L3 are reconciled by membership so re-running on unchanged
+data is a no-op (and concepts are not re-named). L1 uses `CMRAG_EXTRACT_MODEL` (default `llama3.2`,
+separate from the synthesis model so bulk extraction stays fast); `--model` overrides per run.
 
 ## Synthetic Sample Seed Workflow
 
@@ -239,6 +245,7 @@ export CMRAG_LLM_TIMEOUT=120
 export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval score
 export CMRAG_EXTRACT_MODEL=llama3.2        # model for `mem build-memory` event extraction
 export CMRAG_EPISODE_GAP_HOURS=24          # L2 episode session gap (deterministic, no LLM)
+export CMRAG_CONCEPT_SIM_THRESHOLD=0.60    # L3 concept clustering cosine threshold (embeddings extra)
 ```
 
 See `.env.example` for the full list of supported variables.

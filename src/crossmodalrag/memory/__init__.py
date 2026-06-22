@@ -1,3 +1,8 @@
+from crossmodalrag.memory.concepts import (
+    CONCEPT_CLUSTERING_VERSION,
+    ConceptResult,
+    build_concepts,
+)
 from crossmodalrag.memory.episodes import (
     EPISODE_GROUPING_VERSION,
     EpisodeResult,
@@ -31,14 +36,17 @@ from crossmodalrag.memory.store import (
 )
 
 __all__ = [
+    "CONCEPT_CLUSTERING_VERSION",
     "DOWNWARD_RELATIONS",
     "EPISODE_GROUPING_VERSION",
     "EVENT_PROMPT_VERSION",
     "EVIDENCE_LEVEL",
+    "ConceptResult",
     "EpisodeResult",
     "ExtractionResult",
     "MemoryNode",
     "add_edge",
+    "build_concepts",
     "build_episodes",
     "count_edges",
     "extract_events_for_source",

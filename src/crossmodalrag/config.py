@@ -60,6 +60,14 @@ def get_episode_gap_seconds() -> int:
     return int(hours * 3600)
 
 
+def get_concept_sim_threshold() -> float:
+    raw = os.getenv("CMRAG_CONCEPT_SIM_THRESHOLD", "0.60").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.60
+
+
 def get_min_evidence_score() -> float:
     raw = os.getenv("CMRAG_MIN_EVIDENCE_SCORE", "0.15").strip()
     try:

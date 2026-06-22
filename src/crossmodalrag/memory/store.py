@@ -156,6 +156,7 @@ def delete_node(conn: sqlite3.Connection, node_id: int) -> None:
         """,
         (EVIDENCE_LEVEL, node_id, EVIDENCE_LEVEL, node_id),
     )
+    conn.execute("DELETE FROM node_embeddings WHERE node_id = ?", (node_id,))
     conn.execute("DELETE FROM memory_nodes WHERE id = ?", (node_id,))
 
 

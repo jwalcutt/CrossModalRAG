@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_level ON memory_nodes(level);
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_type ON memory_nodes(node_type);
 
+CREATE TABLE IF NOT EXISTS node_embeddings (
+    node_id INTEGER PRIMARY KEY,
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(node_id) REFERENCES memory_nodes(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_embeddings_model ON node_embeddings(model);
+
 CREATE TABLE IF NOT EXISTS memory_edges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     parent_level INTEGER NOT NULL,
