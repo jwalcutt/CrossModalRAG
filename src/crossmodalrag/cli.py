@@ -30,6 +30,7 @@ from crossmodalrag.generate.synthesize import synthesize_answer
 from crossmodalrag.generation_eval import run_generation_eval
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
+from crossmodalrag.memory.episodes import build_episodes
 from crossmodalrag.memory.extract import extract_pending_sources
 from crossmodalrag.memory.integrity import (
     count_edges,
@@ -256,28 +257,39 @@ def eval_generation_cmd(
             print(f"  - {query_text}")
 
 
-def build_memory_cmd(level: str = "event", limit: int | None = None, model: str | None = None) -> None:
+def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | None = None) -> None:
+    build_events = level in ("event", "all")
+    build_eps = level in ("episode", "all")
     db_path = get_db_path()
-    provider = get_default_llm_provider(model or get_extract_model())
-    if provider is None:
-        raise SystemExit("No LLM provider configured (set CMRAG_LLM_PROVIDER).")
     conn = connect(db_path)
     try:
         init_db(conn)
-        try:
-            result = extract_pending_sources(conn, provider, limit=limit)
-        except LLMUnavailable as exc:
-            raise SystemExit(str(exc))
+        print(f"Memory DB: {db_path}")
+
+        if build_events:
+            provider = get_default_llm_provider(model or get_extract_model())
+            if provider is None:
+                raise SystemExit("No LLM provider configured (set CMRAG_LLM_PROVIDER).")
+            try:
+                result = extract_pending_sources(conn, provider, limit=limit)
+            except LLMUnavailable as exc:
+                raise SystemExit(str(exc))
+            print(f"L1 events | model: {provider.name}")
+            print(f"  Sources processed: {result.sources_processed}")
+            print(f"  Sources skipped (up to date): {result.sources_skipped}")
+            print(f"  Events created: {result.events_created}")
+            if result.parse_failures:
+                print(f"  Unparseable sources (will retry next run): {result.parse_failures}")
+
+        if build_eps:
+            episodes = build_episodes(conn)
+            print("L2 episodes")
+            print(f"  Episodes created: {episodes.episodes_created}")
+            print(f"  Episodes kept (up to date): {episodes.episodes_kept}")
+            print(f"  Episodes deleted (stale): {episodes.episodes_deleted}")
+            print(f"  Events grouped: {episodes.events_grouped}")
     finally:
         conn.close()
-
-    print(f"Memory DB: {db_path}")
-    print(f"Level: L1 {level} | model: {provider.name}")
-    print(f"Sources processed: {result.sources_processed}")
-    print(f"Sources skipped (up to date): {result.sources_skipped}")
-    print(f"Events created: {result.events_created}")
-    if result.parse_failures:
-        print(f"Sources with unparseable output (will retry next run): {result.parse_failures}")
     print("Run `mem memory-stats` to inspect node/edge counts and integrity.")
 
 
@@ -449,19 +461,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_build = sub.add_parser(
         "build-memory",
-        help="Derive hierarchical memory from L0 evidence (currently L1 atomic events; requires Ollama).",
+        help="Derive hierarchical memory from L0 evidence (L1 events via Ollama; L2 episodes deterministic).",
     )
     p_build.add_argument(
         "--level",
-        choices=["event"],
-        default="event",
-        help="Memory level to build (only 'event' is implemented in this phase).",
+        choices=["event", "episode", "all"],
+        default="all",
+        help="Memory level to build: 'event' (LLM), 'episode' (no LLM), or 'all' (default).",
     )
     p_build.add_argument(
         "--limit",
         type=int,
         default=None,
-        help="Max number of sources to (re)process this run (resumable across runs).",
+        help="Max number of sources to (re)process for event extraction this run (resumable).",
     )
     p_build.add_argument(
         "--model",

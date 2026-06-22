@@ -1,3 +1,8 @@
+from crossmodalrag.memory.episodes import (
+    EPISODE_GROUPING_VERSION,
+    EpisodeResult,
+    build_episodes,
+)
 from crossmodalrag.memory.extract import (
     EVENT_PROMPT_VERSION,
     ExtractionResult,
@@ -27,11 +32,14 @@ from crossmodalrag.memory.store import (
 
 __all__ = [
     "DOWNWARD_RELATIONS",
+    "EPISODE_GROUPING_VERSION",
     "EVENT_PROMPT_VERSION",
     "EVIDENCE_LEVEL",
+    "EpisodeResult",
     "ExtractionResult",
     "MemoryNode",
     "add_edge",
+    "build_episodes",
     "count_edges",
     "extract_events_for_source",
     "extract_pending_sources",

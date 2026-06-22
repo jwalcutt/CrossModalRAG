@@ -3,13 +3,14 @@
 This repository contains a local-first foundation for a cross-modal memory system.
 
 Current scope:
+
 - Ingest markdown notes into SQLite.
 - Ingest git commits and diffs into SQLite.
 - Create structure-aware searchable chunks from evidence.
 - Query with a hybrid (semantic vector + lexical + recency) retriever and get cited evidence.
 - Optional local embeddings via `fastembed` (no torch); falls back to lexical when not installed.
 - Synthesize grounded answers with a local LLM (Ollama) constrained to and citing the evidence,
-  abstaining when evidence is weak; falls back to a deterministic template when Ollama is absent.
+abstaining when evidence is weak; falls back to a deterministic template when Ollama is absent.
 
 ## Quickstart
 
@@ -161,28 +162,35 @@ unanswerable ones). Queries with empty `expected_source_uris` are treated as neg
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
-- `mem build-memory [--level event] [--limit N] [--model ID]` (requires Ollama)
+- `mem build-memory [--level event|episode|all] [--limit N] [--model ID]` (events require Ollama; episodes don't)
 - `mem memory-stats`
 
 ## Hierarchical Memory (experimental)
 
-Beyond flat evidence retrieval, CrossModalRAG can build higher-level memory layers on top of the
-L0 evidence chunks: L1 atomic events → L2 episodes → L3 concepts (see `project-scope.md` §2). Every
-higher-level node is traceable down to its L0 evidence.
+Beyond flat evidence retrieval, CrossModalRAG can build higher-level memory layers on top of the  
+L0 evidence chunks: L1 atomic events → L2 episodes → L3 concepts . Every higher-level node is traceable down to its L0 evidence.
 
-Currently implemented: the node/edge substrate and **L1 atomic-event extraction**. `mem build-memory`
-uses a local LLM (Ollama) to extract atomic events ("what happened": a decision, learning, fix,
-task, or change) from each source, linking each event to its L0 evidence.
+Currently implemented: the node/edge substrate, **L1 atomic-event extraction**, and **L2 episode
+grouping**. `mem build-memory` derives both:
+
+- **L1 events** (requires Ollama): a local LLM extracts atomic events ("what happened": a decision,
+  learning, fix, task, or change) from each source, linking each event to its L0 evidence.
+- **L2 episodes** (no LLM): events are grouped into "sessions of related work" by project (git repo
+  / note folder) and time gap — a new episode starts when consecutive events in a project are more
+  than `CMRAG_EPISODE_GAP_HOURS` apart (default 24). Each episode links to its member events, and
+  drills down to L0 through them.
 
 ```bash
-mem build-memory --limit 50    # extract L1 events for up to 50 sources (resumable)
-mem memory-stats               # node/edge counts + structural integrity
+mem build-memory --limit 50          # build L1 events (up to 50 sources) + L2 episodes
+mem build-memory --level event       # only L1 events (LLM)
+mem build-memory --level episode     # only L2 episodes (no Ollama needed)
+mem memory-stats                     # node/edge counts + structural integrity
 ```
 
-Extraction is deterministic and incremental: a source is re-processed only when its content, the
-model, or the prompt version changes — re-running on unchanged data is a no-op. It uses
-`CMRAG_EXTRACT_MODEL` (default `llama3.2`, kept separate from the synthesis model so bulk extraction
-stays fast); `--model` overrides per run.
+Both layers are deterministic and incremental: L1 sources are re-extracted only when content,
+model, or prompt version changes; L2 episodes are reconciled by membership so re-running on
+unchanged data is a no-op. L1 uses `CMRAG_EXTRACT_MODEL` (default `llama3.2`, separate from the
+synthesis model so bulk extraction stays fast); `--model` overrides per run.
 
 ## Synthetic Sample Seed Workflow
 
@@ -230,6 +238,7 @@ export CMRAG_LLM_BASE_URL=http://localhost:11434
 export CMRAG_LLM_TIMEOUT=120
 export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval score
 export CMRAG_EXTRACT_MODEL=llama3.2        # model for `mem build-memory` event extraction
+export CMRAG_EPISODE_GAP_HOURS=24          # L2 episode session gap (deterministic, no LLM)
 ```
 
 See `.env.example` for the full list of supported variables.

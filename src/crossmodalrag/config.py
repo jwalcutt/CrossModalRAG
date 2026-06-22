@@ -51,6 +51,15 @@ def get_extract_model() -> str:
     return os.getenv("CMRAG_EXTRACT_MODEL", "llama3.2").strip() or "llama3.2"
 
 
+def get_episode_gap_seconds() -> int:
+    raw = os.getenv("CMRAG_EPISODE_GAP_HOURS", "24").strip()
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = 24.0
+    return int(hours * 3600)
+
+
 def get_min_evidence_score() -> float:
     raw = os.getenv("CMRAG_MIN_EVIDENCE_SCORE", "0.15").strip()
     try:
