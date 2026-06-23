@@ -19,7 +19,7 @@ def test_seed_sample_data_is_reusable_and_idempotent(tmp_path: Path) -> None:
         first = seed_sample_data(conn, workspace_dir=workspace_dir)
         assert first.notes_chunks_inserted > 0
         assert first.git_chunks_inserted > 0
-        assert first.eval_queries_upserted == 4
+        assert first.eval_queries_upserted == 6
         assert (first.vault_dir / "projects" / "crossmodalrag.md").exists()
         assert (first.repo_dir / ".git").exists()
 
@@ -32,7 +32,7 @@ def test_seed_sample_data_is_reusable_and_idempotent(tmp_path: Path) -> None:
         second = seed_sample_data(conn, workspace_dir=workspace_dir)
         assert second.notes_chunks_inserted == 0
         assert second.git_chunks_inserted == 0
-        assert second.eval_queries_upserted == 4
+        assert second.eval_queries_upserted == 6
 
         assert _seed_snapshot(conn) == baseline
     finally:
@@ -97,7 +97,7 @@ def test_purge_seeded_sample_data_removes_only_sample_rows(tmp_path: Path) -> No
         result = purge_seeded_sample_data(conn, workspace_dir=workspace_dir)
         assert result.source_rows_deleted > 0
         assert result.chunk_rows_deleted > 0
-        assert result.eval_rows_deleted == 4
+        assert result.eval_rows_deleted == 6
 
         remaining_sources = conn.execute(
             "SELECT source_uri FROM sources ORDER BY id"
@@ -129,7 +129,7 @@ def _seed_snapshot(conn) -> tuple[list[tuple], list[tuple], list[tuple]]:
         """
         SELECT query_text, expected_source_uris
         FROM queries_eval
-        WHERE query_text LIKE '[sample]%'
+        WHERE query_text LIKE '[sample%'
         ORDER BY query_text
         """
     ).fetchall()

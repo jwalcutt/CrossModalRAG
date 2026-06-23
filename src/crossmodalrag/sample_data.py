@@ -103,8 +103,10 @@ def purge_seeded_sample_data(conn: sqlite3.Connection, *, workspace_dir: Path) -
             tuple(source_ids),
         ).rowcount
 
+    # '[sample%' (not '[sample]%') so both '[sample]' and '[sample-synth]' rows are purged.
+    # SQLite LIKE treats '[' literally; only '%'/'_' are wildcards.
     eval_rows_deleted = conn.execute(
-        "DELETE FROM queries_eval WHERE query_text LIKE '[sample]%'"
+        "DELETE FROM queries_eval WHERE query_text LIKE '[sample%'"
     ).rowcount
     conn.commit()
 
@@ -190,6 +192,22 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
             # grounded system should abstain. Used by generation eval.
             "[sample] What were the quarterly revenue figures for the Tokyo office?",
             json.dumps([]),
+        ),
+        (
+            # Synthesis case: answer aggregates across BOTH notes (the project plan
+            # describes the smoke-test workflow + namespaced eval queries; the retro
+            # decides to track the query in queries_eval). Used to measure source
+            # coverage of memory-level vs flat retrieval in generation eval.
+            "[sample-synth] How does the sample-seed smoke-test workflow help measure and "
+            "track retrieval quality over time?",
+            json.dumps([note_project_uri, note_retro_uri]),
+        ),
+        (
+            # Synthesis case: spans the retro note (ranking issue) and the commit that
+            # added the seeding-command scaffold referenced by that issue.
+            "[sample-synth] What ranking issue was observed around the sample seeding command "
+            "scaffold, and which commit added that scaffold?",
+            json.dumps([note_retro_uri, f"{repo_dir.resolve()}@{scaffold_sha}"]),
         ),
     ]
     for query_text, expected_source_uris in rows:

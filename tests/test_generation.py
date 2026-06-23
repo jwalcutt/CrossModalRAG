@@ -14,6 +14,7 @@ from crossmodalrag.generate.synthesize import (
     synthesize_answer,
 )
 from crossmodalrag.generation_eval import run_generation_eval
+from crossmodalrag.memory.store import add_edge, insert_node
 from crossmodalrag.retrieve.lexical import RetrievalHit
 
 
@@ -147,9 +148,88 @@ def test_run_generation_eval_metrics(tmp_path, monkeypatch) -> None:
     summary = run_generation_eval(conn, provider, top_k=5, query_prefix="[test]")
 
     assert summary.query_count == 2
+    assert summary.level == "evidence"            # default flat retrieval
     assert summary.citation_validity == 1.0       # no hallucinated ids
     assert summary.source_grounding_hit == 1.0    # answerable cites the expected source
+    assert summary.source_coverage == 1.0         # cites the single expected source
     assert summary.abstention_correct == 1.0      # answered the answerable, abstained the other
+
+
+def _seed_event(conn, title: str, uri: str) -> tuple[int, int]:
+    cur = conn.execute(
+        "INSERT INTO sources (source_type, source_uri, timestamp, title) VALUES (?, ?, ?, ?)",
+        ("note", uri, "2026-06-01T00:00:00+00:00", title),
+    )
+    sid = int(cur.lastrowid)
+    cur = conn.execute(
+        "INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text) VALUES (?, 0, ?)",
+        (sid, title),
+    )
+    chunk_id = int(cur.lastrowid)
+    event_id = insert_node(conn, level=1, node_type="event", title=title)
+    add_edge(conn, 1, event_id, 0, chunk_id, "derived_from")
+    return event_id, chunk_id
+
+
+def test_source_coverage_partial_when_one_of_two_expected_cited(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    conn = connect(tmp_path / "memory.db")
+    init_db(conn)
+    _seed_event(conn, "parser bounds check fix", "/abs/a.md")
+    _seed_event(conn, "parser bounds check guard", "/abs/b.md")
+    # Two-source gold; the stub answer cites only one evidence id -> coverage 0.5.
+    conn.execute(
+        "INSERT INTO queries_eval (query_text, expected_source_uris) VALUES (?, ?)",
+        ("[t] parser bounds", json.dumps(["/abs/a.md", "/abs/b.md"])),
+    )
+    conn.commit()
+
+    summary = run_generation_eval(conn, StubLLMProvider(output="Answer [E1]."), query_prefix="[t]")
+    assert summary.source_grounding_hit == 1.0     # cited at least one expected source
+    assert summary.source_coverage == 0.5          # but only one of the two
+
+
+def test_run_generation_eval_concept_level_grounds_in_l0(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    conn = connect(tmp_path / "memory.db")
+    init_db(conn)
+    event_id, _chunk_id = _seed_event(conn, "fingerprint deterministic ingestion", "/abs/ingest.md")
+    concept = insert_node(conn, level=3, node_type="concept", title="fingerprint deterministic ingestion")
+    add_edge(conn, 3, concept, 1, event_id, "contains")
+    conn.execute(
+        "INSERT INTO queries_eval (query_text, expected_source_uris) VALUES (?, ?)",
+        ("[t] fingerprint ingestion", json.dumps(["/abs/ingest.md"])),
+    )
+    conn.commit()
+
+    # No node embeddings -> concept retrieval is lexical; drill-down still recovers L0,
+    # and the synthesized answer cites that L0 chunk (provenance holds at concept level).
+    provider = StubLLMProvider(output="Grounded at concept level [E1].")
+    summary = run_generation_eval(conn, provider, query_prefix="[t]", level="concept")
+    assert summary.level == "concept"
+    assert summary.query_count == 1
+    assert summary.source_grounding_hit == 1.0
+    assert summary.source_coverage == 1.0
+    assert provider.calls == 1
+
+
+def test_concept_level_abstains_when_no_nodes_match(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    conn = connect(tmp_path / "memory.db")
+    init_db(conn)
+    _seed_event(conn, "unrelated topic", "/abs/x.md")
+    conn.execute(
+        "INSERT INTO queries_eval (query_text, expected_source_uris) VALUES (?, ?)",
+        ("[t] zzz nonmatching query", json.dumps(["/abs/x.md"])),
+    )
+    conn.commit()
+
+    # No concept nodes exist -> empty candidate set -> abstain, no LLM call, no crash.
+    provider = StubLLMProvider(output="should not be used [E1].")
+    summary = run_generation_eval(conn, provider, query_prefix="[t]", level="concept")
+    assert summary.query_count == 1
+    assert summary.results[0].abstained is True
+    assert provider.calls == 0
 
 
 def test_ask_falls_back_to_template_when_llm_unavailable(tmp_path, monkeypatch, capsys) -> None:

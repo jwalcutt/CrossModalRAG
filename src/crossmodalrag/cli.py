@@ -275,6 +275,7 @@ def eval_generation_cmd(
     query_prefix: str | None = None,
     profile: str = DEFAULT_PROFILE,
     model: str | None = None,
+    level: str = "evidence",
 ) -> None:
     db_path = get_db_path()
     provider = get_default_llm_provider()
@@ -287,7 +288,7 @@ def eval_generation_cmd(
         init_db(conn)
         try:
             summary = run_generation_eval(
-                conn, provider, top_k=top_k, query_prefix=query_prefix, profile=profile
+                conn, provider, top_k=top_k, query_prefix=query_prefix, profile=profile, level=level
             )
         except LLMUnavailable as exc:
             raise SystemExit(str(exc))
@@ -295,7 +296,7 @@ def eval_generation_cmd(
         conn.close()
 
     print(f"Evaluation DB: {db_path}")
-    print(f"Model: {summary.model} | profile: {summary.profile}")
+    print(f"Model: {summary.model} | level: {summary.level} | profile: {summary.profile}")
     if query_prefix:
         print(f"Query prefix filter: {query_prefix}")
     if summary.query_count == 0:
@@ -304,6 +305,7 @@ def eval_generation_cmd(
     print(f"Queries evaluated: {summary.query_count}")
     print(f"Citation validity: {summary.citation_validity:.3f}")
     print(f"Source-grounding hit: {summary.source_grounding_hit:.3f}")
+    print(f"Source coverage: {summary.source_coverage:.3f}")
     print(f"Abstention correct: {summary.abstention_correct:.3f}")
     bad = [r.query_text for r in summary.results if not r.abstention_correct or not r.citation_valid]
     if bad:
@@ -625,6 +627,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hybrid retrieval profile (vector/lexical/recency blend).",
     )
     p_eval_gen.add_argument(
+        "--level",
+        choices=level_choices,
+        default="evidence",
+        help="Retrieval level: 'evidence' (default) or a memory level; higher levels drill "
+        "matched nodes down to L0 before synthesis (answers still cite L0).",
+    )
+    p_eval_gen.add_argument(
         "--model",
         type=str,
         default=None,
@@ -757,6 +766,7 @@ def main() -> None:
             query_prefix=args.query_prefix,
             profile=args.profile,
             model=args.model,
+            level=args.level,
         )
         return
     if args.command == "build-memory":

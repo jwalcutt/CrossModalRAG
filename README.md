@@ -155,13 +155,22 @@ mem eval --top-k 5 --level concept                    # drill-down recall via th
 8. Evaluate grounded answer quality (citation faithfulness, requires Ollama):
 
 ```bash
-mem eval-generation --query-prefix "[sample]" --profile relevant
+mem eval-generation --query-prefix "[sample]" --profile relevant            # flat L0 baseline
+mem eval-generation --query-prefix "[sample-synth]" --level concept          # synthesis at a memory level
 ```
 
-This reports `citation_validity` (no hallucinated `[E#]`), `source_grounding_hit` (cites an
-expected source), and `abstention_correct` (answers answerable queries, abstains on
-unanswerable ones). Queries with empty `expected_source_uris` are treated as negative
-(should-abstain) cases. Swap `CMRAG_LLM_MODEL` to compare models.
+This reports `citation_validity` (no hallucinated `[E#]`), `source_grounding_hit` (cites at
+least one expected source), `source_coverage` (fraction of an answerable query's expected
+sources actually cited — rewards multi-source synthesis), and `abstention_correct` (answers
+answerable queries, abstains on unanswerable ones). Queries with empty `expected_source_uris`
+are treated as negative (should-abstain) cases. Swap `CMRAG_LLM_MODEL` to compare models.
+
+`--level` runs the same citation-faithfulness eval over a memory level (`event`/`episode`/
+`concept`): it retrieves matching nodes, drills them down to their L0 evidence, and synthesizes
+from that L0 — so answers still cite L0 `[E#]` regardless of entry level. Compare a memory level
+against `--level evidence` to gauge the synthesis benefit. The seeded `[sample-synth]` queries
+have multi-source gold for exactly this; the `[sample]` queries are single-source specific-fact
+checks for measuring no regression.
 
 ## CLI Commands
 
@@ -171,7 +180,7 @@ unanswerable ones). Queries with empty `expected_source_uris` are treated as neg
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
 - `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent] [--explain] [--no-llm] [--json] [--debug]`
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...]`
-- `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--model ID]` (requires Ollama)
+- `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
 - `mem build-memory [--level event|episode|concept|graph|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts need the `[embeddings]` extra; graph needs neither)
 - `mem memory-stats`
@@ -227,7 +236,8 @@ Use `mem seed-sample` to create a tiny deterministic sample vault + sample git r
 - Creates a local workspace at `./data/sample-seed-workspace` by default
 - Writes to a separate temp sample DB by default (does not modify your main `./data/memory.db`)
 - Seeds synthetic markdown notes and git commits (no personal data)
-- Populates namespaced sample rows in `queries_eval` for future eval/smoke tests
+- Populates namespaced sample rows in `queries_eval`: `[sample]` single-source specific-fact
+  queries (incl. one negative/abstain case) and `[sample-synth]` multi-source synthesis queries
 - Safe to re-run; unchanged content is reused and ingestion remains idempotent
 
 Run the sample retrieval benchmark:
