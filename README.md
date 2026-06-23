@@ -237,7 +237,14 @@ Use `mem seed-sample` to create a tiny deterministic sample vault + sample git r
 - Writes to a separate temp sample DB by default (does not modify your main `./data/memory.db`)
 - Seeds synthetic markdown notes and git commits (no personal data)
 - Populates namespaced sample rows in `queries_eval`: `[sample]` single-source specific-fact
-  queries (incl. one negative/abstain case) and `[sample-synth]` multi-source synthesis queries
+  queries (incl. one negative/abstain case), `[sample-synth]` multi-source synthesis queries, and
+  (Phase 3 scaffolding) `[sample-xmodal-text]` / `[sample-xmodal-visual]` cross-modal slices
+- Materializes tiny synthetic cross-modal fixtures (a 1-page PDF + two PNGs) under the sample vault.
+  These are **not yet ingested** (image/PDF ingestion lands in later Phase 3 steps), so the
+  `[sample-xmodal-*]` queries score ~0 today — an intentional baseline. The two slices are designed
+  so an OCR/PDF-text-first strategy should answer the *text-heavy* slice but fail the *visual-heavy*
+  one (a layout/colour-only diagram), which is what the pre-committed native-embedding gate measures
+  (`python scripts/xmodal_gate.py`). Regenerate the fixtures with `scripts/generate_xmodal_fixtures.py`.
 - Safe to re-run; unchanged content is reused and ingestion remains idempotent
 
 Run the sample retrieval benchmark:

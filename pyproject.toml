@@ -12,6 +12,12 @@ dependencies = []
 
 [project.optional-dependencies]
 embeddings = ["fastembed>=0.3", "numpy>=1.24"]
+# Cross-modal ingestion (Phase 3). Each modality is opt-in so the core stays
+# dependency-free; absent extras degrade gracefully (see crossmodalrag.capabilities).
+pdf = ["pypdf>=4.0"]
+ocr = ["pytesseract>=0.3", "pillow>=10.0"]
+# Native (CLIP-class) image embeddings — gated, only adopted on measured benefit (step 6).
+image-embeddings = ["fastembed>=0.3", "numpy>=1.24"]
 
 [project.scripts]
 mem = "crossmodalrag.cli:main"

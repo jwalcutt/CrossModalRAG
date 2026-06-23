@@ -123,11 +123,18 @@ def _materialize_sample_vault(vault_dir: Path) -> None:
     if not fixture_vault.exists():
         raise FileNotFoundError(f"Sample vault fixture not found: {fixture_vault}")
 
-    for src in sorted(fixture_vault.rglob("*.md")):
+    for src in sorted(fixture_vault.rglob("*")):
+        if src.is_dir():
+            continue
         rel = src.relative_to(fixture_vault)
         dest = vault_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        if src.suffix == ".md":
+            dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        else:
+            # Cross-modal fixtures (PDF/image) are binary; copy bytes verbatim so
+            # their fingerprint is stable. Ingestion of these lands in steps 2-3.
+            dest.write_bytes(src.read_bytes())
 
 
 def _materialize_sample_git_repo(repo_dir: Path) -> None:
@@ -174,6 +181,14 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
     note_retro_uri = str((vault_dir / "retros" / "2026-01-14.md").resolve())
     scaffold_sha = _git_rev_parse_subject(repo_dir, "cli: add sample seeding command scaffold")
 
+    # Cross-modal fixtures (Phase 3). These are materialized into the vault now, but
+    # not ingested until Phase 3 steps 2-3 — so these queries score ~0 recall today.
+    # That failing baseline is intentional: it is what the native-embedding gate is
+    # measured against once OCR-text-first ingestion exists.
+    pdf_spec_uri = str((vault_dir / "documents" / "spec.pdf").resolve())
+    screenshot_uri = str((vault_dir / "documents" / "notes-screenshot.png").resolve())
+    diagram_uri = str((vault_dir / "documents" / "architecture-diagram.png").resolve())
+
     rows = [
         (
             "[sample] Where is the pipeline integrity smoke-test plan documented?",
@@ -208,6 +223,29 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
             "[sample-synth] What ranking issue was observed around the sample seeding command "
             "scaffold, and which commit added that scaffold?",
             json.dumps([note_retro_uri, f"{repo_dir.resolve()}@{scaffold_sha}"]),
+        ),
+        (
+            # Text-heavy cross-modal slice: the answer lives in the PDF's
+            # extractable text — OCR/PDF-text-first should retrieve it.
+            "[sample-xmodal-text] What is the minimum retrieval score below which the "
+            "grounded answer gate abstains?",
+            json.dumps([pdf_spec_uri]),
+        ),
+        (
+            # Text-heavy cross-modal slice: the answer is OCR-readable text rendered
+            # in the screenshot.
+            "[sample-xmodal-text] What action was recorded in the embeddings backfill retro "
+            "screenshot?",
+            json.dumps([screenshot_uri]),
+        ),
+        (
+            # Visual-heavy slice: the answer (the red middle/bottleneck stage) is encoded
+            # only in the diagram's layout/colour. The image's only text is a generic
+            # title, so OCR-text-first should FAIL to retrieve it — this is the slice the
+            # native-embedding gate exists to rescue.
+            "[sample-xmodal-visual] In the architecture diagram, which processing stage is "
+            "highlighted as the bottleneck?",
+            json.dumps([diagram_uri]),
         ),
     ]
     for query_text, expected_source_uris in rows:

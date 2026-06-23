@@ -35,6 +35,27 @@ class EvalSummary:
     results: list[EvalQueryResult]
 
 
+# Phase 3 native-embedding gate (pre-committed, see project-scope.md §1a /
+# dev-steps.md Phase 3). Native (CLIP-class) image embeddings become justified
+# when, after the step-3 OCR-text-first baseline, the visually-dominant slice
+# trails the text-dominant slice on Recall@K by at least this much.
+XMODAL_GATE_THRESHOLD = 0.30
+
+
+def xmodal_gate_delta(text_summary: EvalSummary, visual_summary: EvalSummary) -> float:
+    """Recall@K gap between the text-heavy and visual-heavy cross-modal slices."""
+    return text_summary.recall_at_k - visual_summary.recall_at_k
+
+
+def xmodal_gate_fires(
+    text_summary: EvalSummary,
+    visual_summary: EvalSummary,
+    threshold: float = XMODAL_GATE_THRESHOLD,
+) -> bool:
+    """True when the OCR-text-first shortfall justifies the native-embedding spike."""
+    return xmodal_gate_delta(text_summary, visual_summary) >= threshold
+
+
 def run_eval(
     conn: sqlite3.Connection,
     *,
