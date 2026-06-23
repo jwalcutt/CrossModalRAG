@@ -8,8 +8,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from crossmodalrag.capabilities import has_pdf
+from crossmodalrag.capabilities import has_ocr, has_pdf
 from crossmodalrag.ingest.git import ingest_git
+from crossmodalrag.ingest.image import ingest_images
 from crossmodalrag.ingest.notes import ingest_notes
 from crossmodalrag.ingest.pdf import ingest_pdf
 
@@ -27,6 +28,7 @@ class SeedSampleResult:
     git_chunks_inserted: int
     eval_queries_upserted: int
     pdf_chunks_inserted: int = 0
+    image_chunks_inserted: int = 0
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,9 @@ def seed_sample_data(
     # seed path stays dependency-free. Without it the [sample-xmodal-text] PDF query
     # simply stays at its ~0 baseline.
     pdf_chunks_inserted = ingest_pdf(conn, pdf_path=vault_dir) if has_pdf() else 0
+    # Image OCR ingestion is likewise opt-in (requires the [ocr] extra + tesseract);
+    # without it the [sample-xmodal-*] image queries stay at their ~0 baseline.
+    image_chunks_inserted = ingest_images(conn, image_path=vault_dir) if has_ocr() else 0
     eval_queries_upserted = _seed_eval_queries(conn, vault_dir=vault_dir, repo_dir=repo_dir)
     conn.commit()
 
@@ -76,6 +81,7 @@ def seed_sample_data(
         git_chunks_inserted=git_chunks_inserted,
         eval_queries_upserted=eval_queries_upserted,
         pdf_chunks_inserted=pdf_chunks_inserted,
+        image_chunks_inserted=image_chunks_inserted,
     )
 
 
@@ -253,6 +259,15 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
             # native-embedding gate exists to rescue.
             "[sample-xmodal-visual] In the architecture diagram, which processing stage is "
             "highlighted as the bottleneck?",
+            json.dumps([diagram_uri]),
+        ),
+        (
+            # Second visual-heavy query (gate hardening: n=2 reduces phrasing noise). The
+            # colour/position is only in the image; the wording deliberately shares NO
+            # vocabulary with the diagram's OCR text ("Pipeline Overview"), so OCR-text-first
+            # cannot retrieve it via an incidental word match.
+            "[sample-xmodal-visual] In the architecture diagram, what colour fills the middle "
+            "processing box?",
             json.dumps([diagram_uri]),
         ),
     ]

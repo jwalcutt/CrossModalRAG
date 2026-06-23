@@ -19,7 +19,7 @@ def test_seed_sample_data_is_reusable_and_idempotent(tmp_path: Path) -> None:
         first = seed_sample_data(conn, workspace_dir=workspace_dir)
         assert first.notes_chunks_inserted > 0
         assert first.git_chunks_inserted > 0
-        assert first.eval_queries_upserted == 9
+        assert first.eval_queries_upserted == 10
         assert (first.vault_dir / "projects" / "crossmodalrag.md").exists()
         assert (first.repo_dir / ".git").exists()
 
@@ -34,7 +34,8 @@ def test_seed_sample_data_is_reusable_and_idempotent(tmp_path: Path) -> None:
         assert second.git_chunks_inserted == 0
         # Re-seeding is a no-op whether or not the [pdf] extra ingested the sample PDF.
         assert second.pdf_chunks_inserted == 0
-        assert second.eval_queries_upserted == 9
+        assert second.image_chunks_inserted == 0
+        assert second.eval_queries_upserted == 10
 
         assert _seed_snapshot(conn) == baseline
     finally:
@@ -99,7 +100,7 @@ def test_purge_seeded_sample_data_removes_only_sample_rows(tmp_path: Path) -> No
         result = purge_seeded_sample_data(conn, workspace_dir=workspace_dir)
         assert result.source_rows_deleted > 0
         assert result.chunk_rows_deleted > 0
-        assert result.eval_rows_deleted == 9
+        assert result.eval_rows_deleted == 10
 
         remaining_sources = conn.execute(
             "SELECT source_uri FROM sources ORDER BY id"

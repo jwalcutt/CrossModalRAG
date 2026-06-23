@@ -17,7 +17,7 @@ def test_run_eval_computes_metrics_for_seeded_sample_queries(tmp_path: Path) -> 
     try:
         init_db(conn)
         seed_result = seed_sample_data(conn, workspace_dir=workspace_dir)
-        assert seed_result.eval_queries_upserted == 9
+        assert seed_result.eval_queries_upserted == 10
 
         summary = run_eval(conn, top_k=5, query_prefix="[sample]")
         # '[sample]%' matches only the 4 specific-fact rows (not '[sample-synth]'); the 4th

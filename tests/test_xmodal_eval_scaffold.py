@@ -47,7 +47,7 @@ def test_seed_adds_both_xmodal_slices_with_gold(seeded):
     visual_slice = list_eval_queries(conn, query_prefix="[sample-xmodal-visual]")
 
     assert len(text_slice) == 2
-    assert len(visual_slice) == 1
+    assert len(visual_slice) == 2
     # Every cross-modal gold query points at a documents/ fixture URI.
     for q in text_slice + visual_slice:
         assert q.expected_source_uris
@@ -56,8 +56,9 @@ def test_seed_adds_both_xmodal_slices_with_gold(seeded):
 
 def test_visual_slice_gold_is_the_diagram(seeded):
     conn, _, _ = seeded
-    (visual,) = list_eval_queries(conn, query_prefix="[sample-xmodal-visual]")
-    assert visual.expected_source_uris[0].endswith("architecture-diagram.png")
+    visual = list_eval_queries(conn, query_prefix="[sample-xmodal-visual]")
+    assert visual  # both visual queries point at the diagram fixture
+    assert all(q.expected_source_uris[0].endswith("architecture-diagram.png") for q in visual)
 
 
 # --- idempotency + purge ------------------------------------------------------

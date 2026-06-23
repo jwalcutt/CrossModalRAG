@@ -7,6 +7,7 @@ Current scope:
 - Ingest markdown notes into SQLite.
 - Ingest git commits and diffs into SQLite.
 - Ingest PDF text (per-page, with page locators) into SQLite — optional `[pdf]` extra.
+- Ingest image/diagram text via local OCR (with an OCR-confidence signal) — optional `[ocr]` extra.
 - Create structure-aware searchable chunks from evidence.
 - Query with a hybrid (semantic vector + lexical + recency) retriever and get cited evidence.
 - Optional local embeddings via `fastembed` (no torch); falls back to lexical when not installed.
@@ -84,8 +85,28 @@ mem ingest-pdf /path/to/file.pdf /path/to/dir-of-pdfs
 A path may be a single `.pdf` file or a directory (searched recursively). One source row is created
 per file; re-ingesting an unchanged file is a no-op (the fingerprint folds in the extractor version,
 so an extractor upgrade re-derives intentionally). Pages with no extractable text (e.g. scanned,
-image-only pages) register the source but produce no chunks — image OCR is a later Phase 3 step. If
+image-only pages) register the source but produce no chunks — use image OCR (below) for those. If
 you omit paths, `mem ingest-pdf` uses all `PDF_PATH_<n>` values from your local `.env`.
+
+### Ingest images / diagrams (optional, OCR)
+
+Image ingestion is **OCR-text-first**: the recognized text of each image becomes searchable chunks
+tagged `modality=ocr` and carrying an `ocr_confidence` signal (low-confidence OCR is weak evidence).
+It requires the optional `[ocr]` extra (`pip install -e ".[ocr]"`) **and** a local
+[Tesseract](https://github.com/tesseract-ocr/tesseract) binary (e.g. `brew install tesseract`);
+without them the command exits with a hint and the core stays dependency-free.
+
+```bash
+mem ingest-images /path/to/diagram.png /path/to/dir-of-images
+```
+
+A path may be a single image (`.png/.jpg/.jpeg/.gif/.bmp/.tif/.tiff/.webp`) or a directory (searched
+recursively; non-image files are ignored). One source row per image; re-ingesting an unchanged image
+is a no-op (the fingerprint folds in the OCR engine version). An image whose OCR yields no text
+registers the source with no chunks. Purely visual content (a diagram whose meaning is in its layout,
+not its words) is intentionally hard to retrieve from OCR text alone — measuring that gap is what
+`scripts/xmodal_gate.py` is for. If you omit paths, `mem ingest-images` uses all `IMAGE_PATH_<n>`
+values from your local `.env`.
 
 ### Forcing a re-chunk (after chunker changes)
 
@@ -197,6 +218,7 @@ checks for measuring no regression.
 - `mem ingest-notes [<vault_path> ...]` (falls back to `.env` `OBSIDIAN_VAULT_PATH_*`)
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
 - `mem ingest-pdf [<path> ...]` (file or directory; falls back to `.env` `PDF_PATH_*`; requires the `[pdf]` extra)
+- `mem ingest-images [<path> ...]` (file or directory; falls back to `.env` `IMAGE_PATH_*`; requires the `[ocr]` extra + a tesseract binary)
 - `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent] [--explain] [--no-llm] [--json] [--debug]`
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
@@ -259,11 +281,13 @@ Use `mem seed-sample` to create a tiny deterministic sample vault + sample git r
   queries (incl. one negative/abstain case), `[sample-synth]` multi-source synthesis queries, and
   (Phase 3 scaffolding) `[sample-xmodal-text]` / `[sample-xmodal-visual]` cross-modal slices
 - Materializes tiny synthetic cross-modal fixtures (a 1-page PDF + two PNGs) under the sample vault.
-  These are **not yet ingested** (image/PDF ingestion lands in later Phase 3 steps), so the
-  `[sample-xmodal-*]` queries score ~0 today — an intentional baseline. The two slices are designed
-  so an OCR/PDF-text-first strategy should answer the *text-heavy* slice but fail the *visual-heavy*
-  one (a layout/colour-only diagram), which is what the pre-committed native-embedding gate measures
-  (`python scripts/xmodal_gate.py`). Regenerate the fixtures with `scripts/generate_xmodal_fixtures.py`.
+  The PDF is ingested when the `[pdf]` extra is present and the images when `[ocr]` (+ tesseract) is
+  present; otherwise those slices stay at a ~0 baseline. The two slices are designed so an
+  OCR/PDF-text-first strategy answers the *text-heavy* slice but fails the *visual-heavy* one (a
+  layout/colour-only diagram) — the gap the pre-committed native-embedding gate measures. Read the
+  gate **semantically** (it compares against semantic image embeddings):
+  `mem reindex-embeddings` first, then `python scripts/xmodal_gate.py` (it warns if no vectors are
+  stored). Regenerate the fixtures with `scripts/generate_xmodal_fixtures.py`.
 - Safe to re-run; unchanged content is reused and ingestion remains idempotent
 
 Run the sample retrieval benchmark:

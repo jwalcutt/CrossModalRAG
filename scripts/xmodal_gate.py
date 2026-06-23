@@ -9,8 +9,19 @@ OCR-text-first shortfall justifies a native (CLIP-class) image-embedding spike:
 
 NOTE: this is only meaningful after Phase 3 step-3 (OCR-text-first ingestion)
 exists. Before then the cross-modal fixtures are materialized but not ingested,
-so both slices score ~0 and the gate correctly HOLDs — this script being runnable
-and reporting HOLD is the step-1 deliverable; the real measurement comes later.
+so both slices score ~0 and the gate correctly HOLDs.
+
+Authoritative measurement protocol: the native-embedding alternative is *semantic*,
+so the OCR-text-first baseline must be measured semantically too (a lexical-only
+reading handicaps OCR-text-first and can produce a false FIRE). Embed the corpus
+first:
+
+    mem seed-sample --db-path <db>
+    CMRAG_DB_PATH=<db> mem reindex-embeddings   # needs the [embeddings] extra
+    python scripts/xmodal_gate.py --db-path <db>
+
+This script WARNS when no vectors are stored for the active model (lexical
+fallback in effect) so a non-authoritative reading is never mistaken for the gate.
 """
 
 from __future__ import annotations
@@ -26,12 +37,14 @@ if str(SRC_DIR) not in sys.path:
 
 from crossmodalrag.config import get_db_path, load_dotenv  # noqa: E402
 from crossmodalrag.db import connect, init_db  # noqa: E402
+from crossmodalrag.embed.provider import get_default_provider  # noqa: E402
 from crossmodalrag.evaluation import (  # noqa: E402
     XMODAL_GATE_THRESHOLD,
     run_eval,
     xmodal_gate_delta,
     xmodal_gate_fires,
 )
+from crossmodalrag.retrieve.vector import has_vectors_for_model  # noqa: E402
 
 TEXT_PREFIX = "[sample-xmodal-text]"
 VISUAL_PREFIX = "[sample-xmodal-visual]"
@@ -65,6 +78,8 @@ def main() -> None:
     conn = connect(db_path)
     try:
         init_db(conn)
+        provider = get_default_provider()
+        semantic = provider is not None and has_vectors_for_model(conn, provider.name)
         text_summary = run_eval(
             conn, top_k=args.top_k, query_prefix=TEXT_PREFIX, profile=args.profile
         )
@@ -89,6 +104,12 @@ def main() -> None:
     )
     print(f"delta (text - visual) = {delta:.3f}  (threshold {XMODAL_GATE_THRESHOLD:.2f})")
     print(f"GATE: {'FIRE' if fires else 'HOLD'}")
+    if not semantic:
+        print(
+            "WARNING: no stored vectors for the active embedding model — retrieval fell back to "
+            "LEXICAL only. This is NOT the authoritative gate (it handicaps OCR-text-first). "
+            "Run `mem reindex-embeddings` (needs the [embeddings] extra) and re-run."
+        )
     if text_summary.query_count == 0 and visual_summary.query_count == 0:
         print(
             "note: no cross-modal queries scored — seed the sample data and (post step-3) "

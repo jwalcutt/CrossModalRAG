@@ -36,6 +36,7 @@ from crossmodalrag.generate.synthesize import synthesize_answer
 from crossmodalrag.generation_eval import run_generation_eval
 from crossmodalrag.capabilities import MissingModalityBackend
 from crossmodalrag.ingest.git import ingest_git
+from crossmodalrag.ingest.image import ingest_images
 from crossmodalrag.ingest.notes import ingest_notes
 from crossmodalrag.ingest.pdf import ingest_pdf
 from crossmodalrag.memory.concepts import build_concepts
@@ -122,6 +123,27 @@ def ingest_pdf_cmd(pdf_paths: list[Path]) -> None:
         conn.close()
     print(
         f"Completed PDF ingestion for {len(pdf_paths)} path(s) into {db_path}. "
+        f"Total inserted chunks: {total_inserted}"
+    )
+
+
+def ingest_images_cmd(image_paths: list[Path]) -> None:
+    db_path = get_db_path()
+    conn = connect(db_path)
+    embedder = get_default_provider()
+    try:
+        init_db(conn)
+        total_inserted = 0
+        for image_path in image_paths:
+            inserted = ingest_images(conn, image_path=image_path, embedder=embedder)
+            total_inserted += inserted
+            print(f"Ingested image(s) from {image_path} into {db_path}. Inserted chunks: {inserted}")
+    except MissingModalityBackend as exc:
+        raise SystemExit(str(exc))
+    finally:
+        conn.close()
+    print(
+        f"Completed image ingestion for {len(image_paths)} path(s) into {db_path}. "
         f"Total inserted chunks: {total_inserted}"
     )
 
@@ -525,7 +547,7 @@ def seed_sample_cmd(
     print(
         "Inserted chunks "
         f"(notes={result.notes_chunks_inserted}, git={result.git_chunks_inserted}, "
-        f"pdf={result.pdf_chunks_inserted}); "
+        f"pdf={result.pdf_chunks_inserted}, image={result.image_chunks_inserted}); "
         f"eval queries upserted={result.eval_queries_upserted}"
     )
 
@@ -555,6 +577,13 @@ def build_parser() -> argparse.ArgumentParser:
         'Requires the [pdf] extra: pip install -e ".[pdf]".',
     )
     p_pdf.add_argument("pdf_paths", nargs="*", type=Path)
+
+    p_img = sub.add_parser(
+        "ingest-images",
+        help="Ingest image OCR text from one or more files/dirs (or use IMAGE_PATH_* from .env). "
+        'Requires the [ocr] extra (pip install -e ".[ocr]") and a local tesseract binary.',
+    )
+    p_img.add_argument("image_paths", nargs="*", type=Path)
 
     profile_choices = sorted(PROFILE_WEIGHTS)
 
@@ -780,6 +809,20 @@ def main() -> None:
                 "for default ingestion targets."
             )
         ingest_pdf_cmd(pdf_paths)
+        return
+    if args.command == "ingest-images":
+        image_paths = _resolve_ingest_paths(
+            args.image_paths,
+            env_prefix="IMAGE_PATH",
+            command_name="ingest-images",
+        )
+        if not image_paths:
+            parser.error(
+                "No image paths provided. Use `mem ingest-images <path> [<path> ...]` "
+                "or define `IMAGE_PATH_1`, `IMAGE_PATH_2`, ... in your local .env "
+                "for default ingestion targets."
+            )
+        ingest_images_cmd(image_paths)
         return
     if args.command == "ask":
         ask_cmd(
