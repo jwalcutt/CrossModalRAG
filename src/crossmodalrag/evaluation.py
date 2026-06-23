@@ -63,6 +63,7 @@ def run_eval(
     query_prefix: str | None = None,
     profile: str = DEFAULT_PROFILE,
     level: str = "evidence",
+    restrict_source_types: set[str] | None = None,
 ) -> EvalSummary:
     queries = list_eval_queries(conn, query_prefix=query_prefix)
     results: list[EvalQueryResult] = []
@@ -72,7 +73,13 @@ def run_eval(
         if not query.expected_source_uris:
             continue
         if level == "evidence":
-            hits = retrieve(conn, query=query.query_text, top_k=top_k, profile=profile)
+            hits = retrieve(
+                conn,
+                query=query.query_text,
+                top_k=top_k,
+                profile=profile,
+                restrict_source_types=restrict_source_types,
+            )
             retrieved_source_uris = _unique_source_uris_in_order([hit.source_uri for hit in hits])
         else:
             # Level-targeted retrieval + drill-down: recover L0 sources via the matched nodes.

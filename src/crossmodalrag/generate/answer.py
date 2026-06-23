@@ -1,7 +1,25 @@
 from __future__ import annotations
 
 from crossmodalrag.generate.synthesize import GeneratedAnswer
+from crossmodalrag.modality import Locator, format_locator, parse_locator
 from crossmodalrag.retrieve.lexical import RetrievalHit
+
+
+def _locator(hit: RetrievalHit) -> Locator | None:
+    return parse_locator(hit.chunk_metadata_json)
+
+
+def _provenance_str(hit: RetrievalHit) -> str:
+    """Human-readable provenance: modality + a citable locator (+ OCR confidence)."""
+    loc = _locator(hit)
+    rendered = format_locator(hit.source_uri, loc)
+    parts: list[str] = []
+    if loc is not None and loc.modality:
+        parts.append(loc.modality)
+    parts.append(f"uri={rendered}")
+    if loc is not None and loc.ocr_confidence is not None:
+        parts.append(f"ocr_conf={loc.ocr_confidence:.2f}")
+    return " ".join(parts)
 
 
 def format_grounded_answer(query: str, hits: list[RetrievalHit], explain: bool = False) -> str:
@@ -24,7 +42,7 @@ def format_grounded_answer(query: str, hits: list[RetrievalHit], explain: bool =
             )
         )
         lines.append(
-            f"   Evidence: source_id={hit.source_id}, chunk_id={hit.chunk_id}, uri={hit.source_uri}"
+            f"   Evidence: source_id={hit.source_id}, chunk_id={hit.chunk_id}, {_provenance_str(hit)}"
         )
         if explain:
             lines.append(
@@ -61,7 +79,7 @@ def format_generated_answer(gen: GeneratedAnswer, explain: bool = False, debug: 
             marker = "*" if eid in gen.cited_evidence_ids else " "
             lines.append(
                 f" [{eid}]{marker} {hit.source_type} ({hit.title or 'untitled'}) "
-                f"chunk_id={hit.chunk_id} uri={hit.source_uri}"
+                f"chunk_id={hit.chunk_id} {_provenance_str(hit)}"
             )
             if explain or debug:
                 lines.append(
@@ -98,6 +116,11 @@ def generated_answer_to_dict(gen: GeneratedAnswer) -> dict:
                 "source_type": hit.source_type,
                 "source_uri": hit.source_uri,
                 "title": hit.title,
+                # Additive cross-modal provenance (step 4). Existing keys above are unchanged.
+                "modality": _modality_of(hit),
+                "locator": format_locator(hit.source_uri, _locator(hit)),
+                "page": _page_of(hit),
+                "ocr_confidence": _ocr_conf_of(hit),
                 "scores": {
                     "combined": hit.score,
                     "vector": hit.vector_score,
@@ -109,6 +132,21 @@ def generated_answer_to_dict(gen: GeneratedAnswer) -> dict:
             for eid, hit in _ordered_evidence(gen)
         ],
     }
+
+
+def _modality_of(hit: RetrievalHit) -> str | None:
+    loc = _locator(hit)
+    return loc.modality if loc is not None else None
+
+
+def _page_of(hit: RetrievalHit) -> int | None:
+    loc = _locator(hit)
+    return loc.page if loc is not None else None
+
+
+def _ocr_conf_of(hit: RetrievalHit) -> float | None:
+    loc = _locator(hit)
+    return loc.ocr_confidence if loc is not None else None
 
 
 def _ordered_evidence(gen: GeneratedAnswer) -> list[tuple[str, RetrievalHit]]:

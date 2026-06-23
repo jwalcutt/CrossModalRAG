@@ -178,11 +178,20 @@ Requires [Ollama](https://ollama.com) running locally with a model pulled
 - `--explain` prints per-hit score components.
 - `--no-llm` skips synthesis and returns the deterministic evidence template.
 - `--json` emits a structured answer (stable contract for UIs; includes `matched_nodes` at memory levels).
+  Each evidence entry also carries cross-modal provenance: `modality`, a rendered `locator`
+  (e.g. `spec.pdf p.4`), and `page` / `ocr_confidence` when applicable (additive; existing fields
+  unchanged).
+- `--modality` restricts evidence to one or more modalities (repeatable): `text` (notes), `code`
+  (git), `pdf`, `image` (OCR'd images). Citations render the modality and locator inline.
 - `--debug` adds retrieval diagnostics plus the raw prompt and model output.
 
 ```bash
 mem ask "what are the themes of this project?" --level concept   # retrieve concepts, answer from their L0 evidence
+mem ask "what does the spec say about rate limits?" --modality pdf --json   # only PDF evidence, cited as file.pdf p.N
 ```
+
+Near-identical evidence is de-duplicated across modalities (e.g. an OCR'd screenshot of a note and
+the note itself) so the same content isn't cited twice (`CMRAG_DEDUPE_THRESHOLD`, default 0.95).
 
 7. Run retrieval evaluation (using seeded sample queries or your own `queries_eval` rows):
 
@@ -219,8 +228,8 @@ checks for measuring no regression.
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
 - `mem ingest-pdf [<path> ...]` (file or directory; falls back to `.env` `PDF_PATH_*`; requires the `[pdf]` extra)
 - `mem ingest-images [<path> ...]` (file or directory; falls back to `.env` `IMAGE_PATH_*`; requires the `[ocr]` extra + a tesseract binary)
-- `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent] [--explain] [--no-llm] [--json] [--debug]`
-- `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...]`
+- `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent] [--modality text|code|pdf|image ...] [--explain] [--no-llm] [--json] [--debug]`
+- `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...] [--modality text|code|pdf|image ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
 - `mem build-memory [--level event|episode|concept|graph|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts need the `[embeddings]` extra; graph needs neither)

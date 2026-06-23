@@ -25,6 +25,7 @@ class RetrievalHit:
     lexical_score: float
     recency_score: float
     vector_score: float = 0.0
+    chunk_metadata_json: str | None = None
 
 
 def retrieve(
@@ -32,6 +33,7 @@ def retrieve(
     query: str,
     top_k: int = 5,
     restrict_chunk_ids: set[int] | None = None,
+    restrict_source_types: set[str] | None = None,
 ) -> list[RetrievalHit]:
     query_tokens = tokenize(query)
     if not query_tokens:
@@ -44,6 +46,7 @@ def retrieve(
             c.source_id as source_id,
             c.chunk_index as chunk_index,
             c.chunk_text as chunk_text,
+            c.metadata_json as chunk_metadata_json,
             s.source_type as source_type,
             s.source_uri as source_uri,
             s.timestamp as source_timestamp,
@@ -57,6 +60,8 @@ def retrieve(
     scored: list[RetrievalHit] = []
     for row in rows:
         if restrict_chunk_ids is not None and int(row["chunk_id"]) not in restrict_chunk_ids:
+            continue
+        if restrict_source_types is not None and str(row["source_type"]) not in restrict_source_types:
             continue
         tokens = tokenize(str(row["chunk_text"]))
         lex = lexical_overlap_score(query_tokens, tokens)
@@ -78,11 +83,15 @@ def retrieve(
                 score=score,
                 lexical_score=lex,
                 recency_score=recency,
+                chunk_metadata_json=row["chunk_metadata_json"],
             )
         )
 
     scored.sort(key=lambda hit: hit.score, reverse=True)
-    return scored[:top_k]
+    # Local import avoids a circular import (rerank imports from this module).
+    from crossmodalrag.retrieve.rerank import dedupe_hits
+
+    return dedupe_hits(scored)[:top_k]
 
 
 def tokenize(text: str) -> list[str]:

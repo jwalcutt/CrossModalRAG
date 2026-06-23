@@ -39,6 +39,8 @@ from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.image import ingest_images
 from crossmodalrag.ingest.notes import ingest_notes
 from crossmodalrag.ingest.pdf import ingest_pdf
+from crossmodalrag.modality import format_locator, parse_locator
+from crossmodalrag.retrieve.rerank import MODALITY_SOURCE_TYPES, resolve_source_types
 from crossmodalrag.memory.concepts import build_concepts
 from crossmodalrag.memory.episodes import build_episodes
 from crossmodalrag.memory.extract import extract_pending_sources
@@ -157,19 +159,34 @@ def ask_cmd(
     as_json: bool = False,
     debug: bool = False,
     level: str = "evidence",
+    modalities: list[str] | None = None,
 ) -> None:
     db_path = get_db_path()
+    restrict_source_types = resolve_source_types(modalities)
     conn = connect(db_path)
     matched_nodes = []
     try:
         if level == "evidence":
-            hits = retrieve(conn, query=query, top_k=top_k, profile=profile)
+            hits = retrieve(
+                conn,
+                query=query,
+                top_k=top_k,
+                profile=profile,
+                restrict_source_types=restrict_source_types,
+            )
         else:
             # Retrieve at the target level, then ground in the matched nodes' L0 evidence.
             matched_nodes = retrieve_nodes(conn, query, level=level, top_k=top_k, profile=profile)
             chunk_ids = candidate_chunk_ids(conn, matched_nodes)
             hits = (
-                retrieve(conn, query=query, top_k=top_k, profile=profile, restrict_chunk_ids=chunk_ids)
+                retrieve(
+                    conn,
+                    query=query,
+                    top_k=top_k,
+                    profile=profile,
+                    restrict_chunk_ids=chunk_ids,
+                    restrict_source_types=restrict_source_types,
+                )
                 if chunk_ids
                 else []
             )
@@ -221,6 +238,12 @@ def ask_cmd(
                     "source_type": hit.source_type,
                     "source_uri": hit.source_uri,
                     "title": hit.title,
+                    "modality": (loc.modality if (loc := parse_locator(hit.chunk_metadata_json)) else None),
+                    "locator": format_locator(hit.source_uri, parse_locator(hit.chunk_metadata_json)),
+                    "page": (loc.page if (loc := parse_locator(hit.chunk_metadata_json)) else None),
+                    "ocr_confidence": (
+                        loc.ocr_confidence if (loc := parse_locator(hit.chunk_metadata_json)) else None
+                    ),
                     "scores": {
                         "combined": hit.score,
                         "vector": hit.vector_score,
@@ -255,8 +278,10 @@ def eval_cmd(
     load_queries_path: Path | None = None,
     profile: str = DEFAULT_PROFILE,
     level: str = "evidence",
+    modalities: list[str] | None = None,
 ) -> None:
     db_path = get_db_path()
+    restrict_source_types = resolve_source_types(modalities)
     conn = connect(db_path)
     try:
         init_db(conn)
@@ -264,7 +289,14 @@ def eval_cmd(
         if load_queries_path is not None:
             queries = load_eval_queries_file(load_queries_path)
             loaded = upsert_eval_queries(conn, queries)
-        summary = run_eval(conn, top_k=top_k, query_prefix=query_prefix, profile=profile, level=level)
+        summary = run_eval(
+            conn,
+            top_k=top_k,
+            query_prefix=query_prefix,
+            profile=profile,
+            level=level,
+            restrict_source_types=restrict_source_types,
+        )
     finally:
         conn.close()
 
@@ -588,6 +620,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile_choices = sorted(PROFILE_WEIGHTS)
 
     level_choices = ["evidence", "event", "episode", "concept"]
+    modality_choices = sorted(MODALITY_SOURCE_TYPES)
 
     p_ask = sub.add_parser("ask", help="Query indexed evidence.")
     p_ask.add_argument("query", type=str)
@@ -626,6 +659,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include retrieval diagnostics, the raw prompt, and raw model output.",
     )
+    p_ask.add_argument(
+        "--modality",
+        choices=modality_choices,
+        action="append",
+        default=None,
+        help="Restrict evidence to one or more modalities (repeatable). "
+        "Maps to source types: text=notes, code=git, pdf=PDFs, image=OCR'd images.",
+    )
 
     p_eval = sub.add_parser(
         "eval",
@@ -655,6 +696,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=level_choices,
         default="evidence",
         help="Retrieval level: 'evidence' (default) or a memory level evaluated via drill-down.",
+    )
+    p_eval.add_argument(
+        "--modality",
+        choices=modality_choices,
+        action="append",
+        default=None,
+        help="Restrict evidence to one or more modalities (repeatable): text/code/pdf/image.",
     )
 
     p_reindex = sub.add_parser(
@@ -834,6 +882,7 @@ def main() -> None:
             as_json=args.as_json,
             debug=args.debug,
             level=args.level,
+            modalities=args.modality,
         )
         return
     if args.command == "eval":
@@ -843,6 +892,7 @@ def main() -> None:
             load_queries_path=args.load_queries,
             profile=args.profile,
             level=args.level,
+            modalities=args.modality,
         )
         return
     if args.command == "reindex-embeddings":

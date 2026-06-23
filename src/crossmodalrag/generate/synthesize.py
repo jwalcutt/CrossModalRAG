@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from crossmodalrag.config import get_min_evidence_score
 from crossmodalrag.generate.provider import LLMProvider
+from crossmodalrag.modality import format_locator, parse_locator
 from crossmodalrag.retrieve.lexical import RetrievalHit
 
 
@@ -52,9 +53,11 @@ def build_evidence_prompt(
         eid = f"E{idx}"
         id_map[eid] = hit
         excerpt = " ".join(hit.chunk_text.split())
+        locator = parse_locator(hit.chunk_metadata_json)
+        modality = f"{locator.modality} | " if locator is not None and locator.modality else ""
         lines.append(
-            f"[{eid}] ({hit.source_type}: {hit.title or 'untitled'} | "
-            f"uri={hit.source_uri} | chunk_id={hit.chunk_id})\n{excerpt}"
+            f"[{eid}] ({hit.source_type}: {hit.title or 'untitled'} | {modality}"
+            f"uri={format_locator(hit.source_uri, locator)} | chunk_id={hit.chunk_id})\n{excerpt}"
         )
     lines.append("")
     lines.append(f"Question: {query}")

@@ -26,13 +26,15 @@ def retrieve(
     profile: str = DEFAULT_PROFILE,
     provider: EmbeddingProvider | None = None,
     restrict_chunk_ids: set[int] | None = None,
+    restrict_source_types: set[str] | None = None,
 ) -> list[RetrievalHit]:
     """Hybrid retrieval blending semantic, lexical, and recency signals.
 
     Falls back to pure lexical+recency retrieval when no embedding provider is
     available or no stored vectors match the active model. ``restrict_chunk_ids``,
     when given, limits scoring to that chunk set (used for level-targeted
-    drill-down retrieval).
+    drill-down retrieval); ``restrict_source_types`` limits to a modality's
+    source_type(s) (the ``--modality`` filter).
     """
     if profile not in PROFILE_WEIGHTS:
         raise ValueError(
@@ -42,7 +44,13 @@ def retrieve(
     provider = provider or get_default_provider()
     if provider is None or not has_vectors_for_model(conn, provider.name):
         # No semantic signal available — preserve the established lexical behavior.
-        return lexical.retrieve(conn, query=query, top_k=top_k, restrict_chunk_ids=restrict_chunk_ids)
+        return lexical.retrieve(
+            conn,
+            query=query,
+            top_k=top_k,
+            restrict_chunk_ids=restrict_chunk_ids,
+            restrict_source_types=restrict_source_types,
+        )
 
     query_tokens = lexical.tokenize(query)
     query_vector = provider.embed([query])[0]
@@ -59,6 +67,7 @@ def retrieve(
             c.source_id as source_id,
             c.chunk_index as chunk_index,
             c.chunk_text as chunk_text,
+            c.metadata_json as chunk_metadata_json,
             s.source_type as source_type,
             s.source_uri as source_uri,
             s.timestamp as source_timestamp,
@@ -72,6 +81,8 @@ def retrieve(
     for row in rows:
         chunk_id = int(row["chunk_id"])
         if restrict_chunk_ids is not None and chunk_id not in restrict_chunk_ids:
+            continue
+        if restrict_source_types is not None and str(row["source_type"]) not in restrict_source_types:
             continue
         cosine = vector_sims.get(chunk_id)
         lex = (
@@ -99,8 +110,11 @@ def retrieve(
                 lexical_score=lex,
                 recency_score=recency,
                 vector_score=vec_norm,
+                chunk_metadata_json=row["chunk_metadata_json"],
             )
         )
 
     hits.sort(key=lambda hit: hit.score, reverse=True)
-    return hits[:top_k]
+    from crossmodalrag.retrieve.rerank import dedupe_hits
+
+    return dedupe_hits(hits)[:top_k]

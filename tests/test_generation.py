@@ -96,6 +96,61 @@ def test_json_contract_invariants() -> None:
     json.dumps(data)
 
 
+def _modal_hit(chunk_id, source_type, uri, metadata: dict, text="evidence body") -> RetrievalHit:
+    return RetrievalHit(
+        chunk_id=chunk_id,
+        source_id=chunk_id,
+        source_type=source_type,
+        source_uri=uri,
+        source_timestamp="2026-06-01T00:00:00+00:00",
+        title=source_type,
+        chunk_index=0,
+        chunk_text=text,
+        score=0.9,
+        lexical_score=0.9,
+        recency_score=0.5,
+        chunk_metadata_json=json.dumps(metadata),
+    )
+
+
+def test_json_adds_modality_locator_without_dropping_existing_keys() -> None:
+    from crossmodalrag.modality import MODALITY_OCR, MODALITY_PDF_PAGE, build_chunk_metadata
+
+    hits = [
+        _modal_hit(1, "pdf", "/abs/spec.pdf", build_chunk_metadata(modality=MODALITY_PDF_PAGE, source_type="pdf", page=4)),
+        _modal_hit(2, "image", "/abs/diagram.png", build_chunk_metadata(modality=MODALITY_OCR, source_type="image", ocr_confidence=0.95)),
+    ]
+    gen = synthesize_answer("q", hits, StubLLMProvider(output="See [E1] and [E2]."), min_evidence_score=0.0)
+    data = generated_answer_to_dict(gen)
+
+    pdf, img = data["evidence"][0], data["evidence"][1]
+    # New additive fields.
+    assert pdf["modality"] == "pdf-page"
+    assert pdf["locator"] == "/abs/spec.pdf p.4"
+    assert pdf["page"] == 4
+    assert pdf["ocr_confidence"] is None
+    assert img["modality"] == "ocr"
+    assert img["ocr_confidence"] == 0.95
+    # Existing keys remain present and stable.
+    for key in ("evidence_id", "cited", "source_id", "chunk_id", "source_type", "source_uri", "title", "scores", "excerpt"):
+        assert key in pdf
+    json.dumps(data)
+
+
+def test_plain_text_renders_page_locator_and_ocr_confidence() -> None:
+    from crossmodalrag.modality import MODALITY_OCR, MODALITY_PDF_PAGE, build_chunk_metadata
+
+    hits = [
+        _modal_hit(1, "pdf", "/abs/spec.pdf", build_chunk_metadata(modality=MODALITY_PDF_PAGE, source_type="pdf", page=4)),
+        _modal_hit(2, "image", "/abs/diagram.png", build_chunk_metadata(modality=MODALITY_OCR, source_type="image", ocr_confidence=0.95)),
+    ]
+    gen = synthesize_answer("q", hits, StubLLMProvider(output="See [E1] and [E2]."), min_evidence_score=0.0)
+    text = format_generated_answer(gen)
+
+    assert "spec.pdf p.4" in text
+    assert "ocr_conf=0.95" in text
+
+
 def test_ollama_provider_parses_response(monkeypatch) -> None:
     class _FakeResp:
         def __enter__(self):

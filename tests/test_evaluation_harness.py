@@ -35,6 +35,39 @@ def test_run_eval_computes_metrics_for_seeded_sample_queries(tmp_path: Path) -> 
         conn.close()
 
 
+def test_run_eval_restrict_source_types_scopes_recall(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "mem.db")
+    try:
+        init_db(conn)
+        # Two sources answering the same query, different modalities.
+        for stype, uri in (("note", "test://note/x"), ("pdf", "test://pdf/x")):
+            cur = conn.execute(
+                "INSERT INTO sources (source_type, source_uri, timestamp, title) VALUES (?, ?, ?, ?)",
+                (stype, uri, "2026-02-01T00:00:00+00:00", "x"),
+            )
+            sid = int(cur.lastrowid)
+            conn.execute(
+                "INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text) VALUES (?, ?, ?)",
+                (sid, 0, "rate limit configuration default value"),
+            )
+        conn.execute(
+            "INSERT INTO queries_eval (query_text, expected_source_uris) VALUES (?, ?)",
+            ("rate limit configuration default", json.dumps(["test://note/x", "test://pdf/x"])),
+        )
+        conn.commit()
+
+        both = run_eval(conn, top_k=5)
+        assert both.recall_at_k == 1.0
+
+        pdf_only = run_eval(conn, top_k=5, restrict_source_types={"pdf"})
+        # Only the pdf source can be retrieved now; the note gold is unreachable but the
+        # pdf gold still satisfies recall for this query.
+        assert pdf_only.recall_at_k == 1.0
+        assert pdf_only.results[0].retrieved_source_uris == ["test://pdf/x"]
+    finally:
+        conn.close()
+
+
 def test_eval_cmd_can_load_queries_and_print_metrics(tmp_path: Path, monkeypatch, capsys) -> None:
     db_path = tmp_path / "mem.db"
     conn = connect(db_path)
