@@ -34,8 +34,10 @@ from crossmodalrag.generate.answer import (
 from crossmodalrag.generate.provider import LLMUnavailable, get_default_llm_provider
 from crossmodalrag.generate.synthesize import synthesize_answer
 from crossmodalrag.generation_eval import run_generation_eval
+from crossmodalrag.capabilities import MissingModalityBackend
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
+from crossmodalrag.ingest.pdf import ingest_pdf
 from crossmodalrag.memory.concepts import build_concepts
 from crossmodalrag.memory.episodes import build_episodes
 from crossmodalrag.memory.extract import extract_pending_sources
@@ -99,6 +101,27 @@ def ingest_git_cmd(repo_paths: list[Path], max_commits: int = 300) -> None:
         conn.close()
     print(
         f"Completed git ingestion for {len(repo_paths)} repo(s) into {db_path}. "
+        f"Total inserted chunks: {total_inserted}"
+    )
+
+
+def ingest_pdf_cmd(pdf_paths: list[Path]) -> None:
+    db_path = get_db_path()
+    conn = connect(db_path)
+    embedder = get_default_provider()
+    try:
+        init_db(conn)
+        total_inserted = 0
+        for pdf_path in pdf_paths:
+            inserted = ingest_pdf(conn, pdf_path=pdf_path, embedder=embedder)
+            total_inserted += inserted
+            print(f"Ingested PDF(s) from {pdf_path} into {db_path}. Inserted chunks: {inserted}")
+    except MissingModalityBackend as exc:
+        raise SystemExit(str(exc))
+    finally:
+        conn.close()
+    print(
+        f"Completed PDF ingestion for {len(pdf_paths)} path(s) into {db_path}. "
         f"Total inserted chunks: {total_inserted}"
     )
 
@@ -501,7 +524,8 @@ def seed_sample_cmd(
     print(f"Sample git repo: {result.repo_dir}")
     print(
         "Inserted chunks "
-        f"(notes={result.notes_chunks_inserted}, git={result.git_chunks_inserted}); "
+        f"(notes={result.notes_chunks_inserted}, git={result.git_chunks_inserted}, "
+        f"pdf={result.pdf_chunks_inserted}); "
         f"eval queries upserted={result.eval_queries_upserted}"
     )
 
@@ -524,6 +548,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_git.add_argument("repo_paths", nargs="*", type=Path)
     p_git.add_argument("--max-commits", type=int, default=300)
+
+    p_pdf = sub.add_parser(
+        "ingest-pdf",
+        help="Ingest PDF text (per-page) from one or more files/dirs (or use PDF_PATH_* from .env). "
+        'Requires the [pdf] extra: pip install -e ".[pdf]".',
+    )
+    p_pdf.add_argument("pdf_paths", nargs="*", type=Path)
 
     profile_choices = sorted(PROFILE_WEIGHTS)
 
@@ -735,6 +766,20 @@ def main() -> None:
                 "for default ingestion targets."
             )
         ingest_git_cmd(repo_paths, max_commits=args.max_commits)
+        return
+    if args.command == "ingest-pdf":
+        pdf_paths = _resolve_ingest_paths(
+            args.pdf_paths,
+            env_prefix="PDF_PATH",
+            command_name="ingest-pdf",
+        )
+        if not pdf_paths:
+            parser.error(
+                "No PDF paths provided. Use `mem ingest-pdf <path> [<path> ...]` "
+                "or define `PDF_PATH_1`, `PDF_PATH_2`, ... in your local .env "
+                "for default ingestion targets."
+            )
+        ingest_pdf_cmd(pdf_paths)
         return
     if args.command == "ask":
         ask_cmd(

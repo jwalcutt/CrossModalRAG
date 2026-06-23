@@ -8,8 +8,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from crossmodalrag.capabilities import has_pdf
 from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.notes import ingest_notes
+from crossmodalrag.ingest.pdf import ingest_pdf
 
 SAMPLE_AUTHOR_NAME = "Test User"
 SAMPLE_AUTHOR_EMAIL = "test@example.com"
@@ -24,6 +26,7 @@ class SeedSampleResult:
     notes_chunks_inserted: int
     git_chunks_inserted: int
     eval_queries_upserted: int
+    pdf_chunks_inserted: int = 0
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,10 @@ def seed_sample_data(
         target_author_name=SAMPLE_AUTHOR_NAME,
         target_author_email=SAMPLE_AUTHOR_EMAIL,
     )
+    # Cross-modal: ingest the sample PDF only when the [pdf] extra is present, so the
+    # seed path stays dependency-free. Without it the [sample-xmodal-text] PDF query
+    # simply stays at its ~0 baseline.
+    pdf_chunks_inserted = ingest_pdf(conn, pdf_path=vault_dir) if has_pdf() else 0
     eval_queries_upserted = _seed_eval_queries(conn, vault_dir=vault_dir, repo_dir=repo_dir)
     conn.commit()
 
@@ -68,6 +75,7 @@ def seed_sample_data(
         notes_chunks_inserted=notes_chunks_inserted,
         git_chunks_inserted=git_chunks_inserted,
         eval_queries_upserted=eval_queries_upserted,
+        pdf_chunks_inserted=pdf_chunks_inserted,
     )
 
 

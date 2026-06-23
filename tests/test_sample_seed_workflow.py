@@ -32,6 +32,8 @@ def test_seed_sample_data_is_reusable_and_idempotent(tmp_path: Path) -> None:
         second = seed_sample_data(conn, workspace_dir=workspace_dir)
         assert second.notes_chunks_inserted == 0
         assert second.git_chunks_inserted == 0
+        # Re-seeding is a no-op whether or not the [pdf] extra ingested the sample PDF.
+        assert second.pdf_chunks_inserted == 0
         assert second.eval_queries_upserted == 9
 
         assert _seed_snapshot(conn) == baseline

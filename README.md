@@ -6,6 +6,7 @@ Current scope:
 
 - Ingest markdown notes into SQLite.
 - Ingest git commits and diffs into SQLite.
+- Ingest PDF text (per-page, with page locators) into SQLite — optional `[pdf]` extra.
 - Create structure-aware searchable chunks from evidence.
 - Query with a hybrid (semantic vector + lexical + recency) retriever and get cited evidence.
 - Optional local embeddings via `fastembed` (no torch); falls back to lexical when not installed.
@@ -68,6 +69,23 @@ mem ingest-git /path/to/repo-a /path/to/repo-b --max-commits 300
 ```
 
 If you omit paths, `mem ingest-git` will use all `REPO_PATH_<n>` values from your local `.env`.
+
+### Ingest PDFs (optional, cross-modal)
+
+PDF ingestion is **text-first**: each page's extractable text becomes searchable chunks that carry a
+1-based page locator, so evidence can be cited as `file.pdf p.N`. It requires the optional `[pdf]`
+extra (`pip install -e ".[pdf]"`); without it the command exits with an install hint and the core
+stays dependency-free.
+
+```bash
+mem ingest-pdf /path/to/file.pdf /path/to/dir-of-pdfs
+```
+
+A path may be a single `.pdf` file or a directory (searched recursively). One source row is created
+per file; re-ingesting an unchanged file is a no-op (the fingerprint folds in the extractor version,
+so an extractor upgrade re-derives intentionally). Pages with no extractable text (e.g. scanned,
+image-only pages) register the source but produce no chunks — image OCR is a later Phase 3 step. If
+you omit paths, `mem ingest-pdf` uses all `PDF_PATH_<n>` values from your local `.env`.
 
 ### Forcing a re-chunk (after chunker changes)
 
@@ -178,6 +196,7 @@ checks for measuring no regression.
 - `mem seed-sample [--workspace-dir PATH] [--force]`
 - `mem ingest-notes [<vault_path> ...]` (falls back to `.env` `OBSIDIAN_VAULT_PATH_*`)
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
+- `mem ingest-pdf [<path> ...]` (file or directory; falls back to `.env` `PDF_PATH_*`; requires the `[pdf]` extra)
 - `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent] [--explain] [--no-llm] [--json] [--debug]`
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
