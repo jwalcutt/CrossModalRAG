@@ -162,7 +162,7 @@ unanswerable ones). Queries with empty `expected_source_uris` are treated as neg
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
-- `mem build-memory [--level event|episode|concept|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts need the `[embeddings]` extra)
+- `mem build-memory [--level event|episode|concept|graph|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts need the `[embeddings]` extra; graph needs neither)
 - `mem memory-stats`
 
 ## Hierarchical Memory (experimental)
@@ -182,15 +182,19 @@ grouping**, and **L3 concept clustering**. `mem build-memory` derives all three:
   semantic similarity (cosine ≥ `CMRAG_CONCEPT_SIM_THRESHOLD`, default 0.60) into recurring topics
   that span episodes. Each new concept is named by the local LLM (`CMRAG_EXTRACT_MODEL`, temp 0)
   with a deterministic fallback when Ollama is unavailable.
+- **Graph** (no LLM/embeddings): computes PageRank **centrality** per node (an importance signal
+  stored on each node) and **concept co-occurrence** links — two concepts get a `relates_to` edge
+  (weighted by shared-episode count) when they have events in the same episode.
 
 Every higher-level node drills down to its L0 evidence through its members.
 
 ```bash
-mem build-memory --limit 50          # build L1 events (up to 50 sources) + L2 episodes + L3 concepts
+mem build-memory --limit 50          # L1 events (up to 50 sources) + L2 episodes + L3 concepts + graph
 mem build-memory --level event       # only L1 events (LLM)
 mem build-memory --level episode     # only L2 episodes (no Ollama needed)
 mem build-memory --level concept     # only L3 concepts (needs the embeddings extra; run reindex-embeddings first)
-mem memory-stats                     # node/edge counts + structural integrity
+mem build-memory --level graph       # only centrality + concept co-occurrence (no LLM/embeddings)
+mem memory-stats                     # node/edge counts, co-occurrence edges, top central nodes, integrity
 ```
 
 All layers are deterministic and incremental: L1 sources are re-extracted only when content,

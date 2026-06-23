@@ -14,6 +14,12 @@ from crossmodalrag.memory.extract import (
     extract_events_for_source,
     extract_pending_sources,
 )
+from crossmodalrag.memory.graph import (
+    GraphResult,
+    build_concept_cooccurrence,
+    build_graph,
+    compute_centrality,
+)
 from crossmodalrag.memory.integrity import (
     count_edges,
     count_nodes_by_level,
@@ -44,10 +50,14 @@ __all__ = [
     "ConceptResult",
     "EpisodeResult",
     "ExtractionResult",
+    "GraphResult",
     "MemoryNode",
     "add_edge",
+    "build_concept_cooccurrence",
     "build_concepts",
     "build_episodes",
+    "build_graph",
+    "compute_centrality",
     "count_edges",
     "extract_events_for_source",
     "extract_pending_sources",

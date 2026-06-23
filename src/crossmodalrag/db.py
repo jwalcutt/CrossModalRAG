@@ -120,6 +120,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, table_name="sources", column_name="source_fingerprint", column_def="TEXT")
+    _ensure_column(conn, table_name="memory_nodes", column_name="centrality", column_def="REAL")
 
 
 def _ensure_column(

@@ -38,6 +38,7 @@ from crossmodalrag.ingest.notes import ingest_notes
 from crossmodalrag.memory.concepts import build_concepts
 from crossmodalrag.memory.episodes import build_episodes
 from crossmodalrag.memory.extract import extract_pending_sources
+from crossmodalrag.memory.graph import build_graph
 from crossmodalrag.memory.integrity import (
     count_edges,
     count_nodes_by_level,
@@ -267,6 +268,7 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
     build_events = level in ("event", "all")
     build_eps = level in ("episode", "all")
     build_concept = level in ("concept", "all")
+    build_graph_layer = level in ("graph", "all")
     db_path = get_db_path()
     conn = connect(db_path)
     try:
@@ -311,6 +313,13 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
             print(f"  Events clustered: {concepts.events_clustered} (unclustered: {concepts.events_unclustered})")
             if concepts.concepts_created:
                 print(f"  Named by LLM: {concepts.named_by_llm} | by fallback: {concepts.named_by_fallback}")
+
+        if build_graph_layer:
+            graph = build_graph(conn)
+            print("Graph")
+            print(f"  Concept co-occurrence edges: {graph.relates_edges_created} "
+                  f"(replaced {graph.relates_edges_deleted})")
+            print(f"  Nodes scored (centrality): {graph.nodes_scored}")
     finally:
         conn.close()
     print("Run `mem memory-stats` to inspect node/edge counts and integrity.")
@@ -327,6 +336,13 @@ def memory_stats_cmd() -> None:
         unsupported = find_unsupported_nodes(conn)
         dangling = find_dangling_edges(conn)
         node_vectors = count_node_embeddings(conn)
+        relates_edges = conn.execute(
+            "SELECT COUNT(*) AS n FROM memory_edges WHERE relation = 'relates_to'"
+        ).fetchone()["n"]
+        top_central = conn.execute(
+            "SELECT id, level, title, centrality FROM memory_nodes "
+            "WHERE centrality IS NOT NULL ORDER BY centrality DESC, id ASC LIMIT 3"
+        ).fetchall()
     finally:
         conn.close()
 
@@ -338,7 +354,13 @@ def memory_stats_cmd() -> None:
     if by_type:
         print("By type: " + ", ".join(f"{name}={count}" for name, count in by_type.items()))
     print(f"Memory edges: {edges}")
+    print(f"Concept co-occurrence edges (relates_to): {relates_edges}")
     print(f"Node embeddings: {node_vectors}")
+    if top_central:
+        print("Top central nodes:")
+        for row in top_central:
+            title = row["title"] or "untitled"
+            print(f"  L{row['level']} #{row['id']} ({row['centrality']:.3f}): {title}")
     print("Integrity:")
     print(f"  unsupported nodes (no L0 evidence): {len(unsupported)}")
     print(f"  dangling edges (missing endpoint): {len(dangling)}")
@@ -490,10 +512,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_build.add_argument(
         "--level",
-        choices=["event", "episode", "concept", "all"],
+        choices=["event", "episode", "concept", "graph", "all"],
         default="all",
         help="Memory level to build: 'event' (LLM), 'episode' (no LLM), "
-        "'concept' (embeddings extra; LLM naming optional), or 'all' (default).",
+        "'concept' (embeddings extra; LLM naming optional), 'graph' (no LLM/embeddings), "
+        "or 'all' (default).",
     )
     p_build.add_argument(
         "--limit",
