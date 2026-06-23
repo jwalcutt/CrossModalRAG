@@ -246,10 +246,13 @@ Currently implemented: the node/edge substrate plus **L1 atomic-event extraction
 grouping**, and **L3 concept clustering**. `mem build-memory` derives all three:
 
 - **L1 events** (requires Ollama): a local LLM extracts atomic events ("what happened": a decision,
-  learning, fix, task, or change) from each source, linking each event to its L0 evidence.
+  learning, fix, task, or change) from each source — including PDF pages and OCR'd images — linking
+  each event to its L0 evidence (so the hierarchy spans modalities and drills back to a cited
+  page/region locator).
 - **L2 episodes** (no LLM): events are grouped into "sessions of related work" by project (git repo
-  / note folder) and time gap — a new episode starts when consecutive events in a project are more
-  than `CMRAG_EPISODE_GAP_HOURS` apart (default 24). Each episode links to its member events.
+  / containing folder for notes, PDFs, and images) and time gap — a new episode starts when
+  consecutive events in a project are more than `CMRAG_EPISODE_GAP_HOURS` apart (default 24). A folder
+  mixing notes, PDFs, and screenshots forms one cross-modal episode. Each episode links to its members.
 - **L3 concepts** (requires the `[embeddings]` extra; LLM naming optional): events are clustered by
   semantic similarity (cosine ≥ `CMRAG_CONCEPT_SIM_THRESHOLD`, default 0.60) into recurring topics
   that span episodes. Each new concept is named by the local LLM (`CMRAG_EXTRACT_MODEL`, temp 0)

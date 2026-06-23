@@ -59,6 +59,14 @@ def test_project_key_derivation() -> None:
     assert _project_key("git_commit", "/home/me/repo@abc123") == "/home/me/repo"
     assert _project_key("note", "/vault/projects/a.md") == "/vault/projects"
     assert _project_key("note", "") == "note"
+    # Cross-modal: PDFs/images group by their containing directory, like notes — so a
+    # note + pdf + image in the same folder share a project (one cross-modal episode).
+    assert _project_key("pdf", "/vault/documents/spec.pdf") == "/vault/documents"
+    assert _project_key("image", "/vault/documents/diagram.png") == "/vault/documents"
+    assert (
+        _project_key("note", "/vault/documents/notes.md")
+        == _project_key("pdf", "/vault/documents/spec.pdf")
+    )
 
 
 def test_grouping_by_project_and_time_gap(conn) -> None:

@@ -149,7 +149,10 @@ def _project_key(source_type: str, source_uri: str) -> str:
         return source_type or "unknown"
     if source_type == "git_commit":
         return source_uri.rsplit("@", 1)[0]
-    if source_type == "note":
+    # File-path modalities (notes, PDFs, images) group by containing directory, so a
+    # folder of related sources — including a mix of notes/PDFs/screenshots — forms one
+    # cross-modal episode rather than every PDF/image collapsing into a single project.
+    if source_type in ("note", "pdf", "image"):
         return os.path.dirname(source_uri) or source_uri
     return source_type or source_uri
 
