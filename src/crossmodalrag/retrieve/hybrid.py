@@ -25,11 +25,14 @@ def retrieve(
     top_k: int = 5,
     profile: str = DEFAULT_PROFILE,
     provider: EmbeddingProvider | None = None,
+    restrict_chunk_ids: set[int] | None = None,
 ) -> list[RetrievalHit]:
     """Hybrid retrieval blending semantic, lexical, and recency signals.
 
     Falls back to pure lexical+recency retrieval when no embedding provider is
-    available or no stored vectors match the active model.
+    available or no stored vectors match the active model. ``restrict_chunk_ids``,
+    when given, limits scoring to that chunk set (used for level-targeted
+    drill-down retrieval).
     """
     if profile not in PROFILE_WEIGHTS:
         raise ValueError(
@@ -39,7 +42,7 @@ def retrieve(
     provider = provider or get_default_provider()
     if provider is None or not has_vectors_for_model(conn, provider.name):
         # No semantic signal available — preserve the established lexical behavior.
-        return lexical.retrieve(conn, query=query, top_k=top_k)
+        return lexical.retrieve(conn, query=query, top_k=top_k, restrict_chunk_ids=restrict_chunk_ids)
 
     query_tokens = lexical.tokenize(query)
     query_vector = provider.embed([query])[0]
@@ -68,6 +71,8 @@ def retrieve(
     hits: list[RetrievalHit] = []
     for row in rows:
         chunk_id = int(row["chunk_id"])
+        if restrict_chunk_ids is not None and chunk_id not in restrict_chunk_ids:
+            continue
         cosine = vector_sims.get(chunk_id)
         lex = (
             lexical.lexical_overlap_score(query_tokens, lexical.tokenize(str(row["chunk_text"])))

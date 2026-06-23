@@ -27,7 +27,12 @@ class RetrievalHit:
     vector_score: float = 0.0
 
 
-def retrieve(conn: sqlite3.Connection, query: str, top_k: int = 5) -> list[RetrievalHit]:
+def retrieve(
+    conn: sqlite3.Connection,
+    query: str,
+    top_k: int = 5,
+    restrict_chunk_ids: set[int] | None = None,
+) -> list[RetrievalHit]:
     query_tokens = tokenize(query)
     if not query_tokens:
         return []
@@ -51,6 +56,8 @@ def retrieve(conn: sqlite3.Connection, query: str, top_k: int = 5) -> list[Retri
     now = datetime.now(timezone.utc)
     scored: list[RetrievalHit] = []
     for row in rows:
+        if restrict_chunk_ids is not None and int(row["chunk_id"]) not in restrict_chunk_ids:
+            continue
         tokens = tokenize(str(row["chunk_text"]))
         lex = lexical_overlap_score(query_tokens, tokens)
         if lex <= 0:

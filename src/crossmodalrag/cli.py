@@ -23,6 +23,7 @@ from crossmodalrag.embed.store import (
     count_embeddings,
     count_node_embeddings,
     embed_pending_chunks,
+    embed_pending_nodes,
 )
 from crossmodalrag.evaluation import load_eval_queries_file, run_eval, upsert_eval_queries
 from crossmodalrag.generate.answer import (
@@ -47,6 +48,7 @@ from crossmodalrag.memory.integrity import (
     find_unsupported_nodes,
 )
 from crossmodalrag.retrieve.hybrid import DEFAULT_PROFILE, PROFILE_WEIGHTS, retrieve
+from crossmodalrag.retrieve.nodes import candidate_chunk_ids, retrieve_nodes
 from crossmodalrag.sample_data import default_sample_db_path, seed_sample_data
 
 def init_db_cmd() -> None:
@@ -109,13 +111,37 @@ def ask_cmd(
     use_llm: bool = True,
     as_json: bool = False,
     debug: bool = False,
+    level: str = "evidence",
 ) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
+    matched_nodes = []
     try:
-        hits = retrieve(conn, query=query, top_k=top_k, profile=profile)
+        if level == "evidence":
+            hits = retrieve(conn, query=query, top_k=top_k, profile=profile)
+        else:
+            # Retrieve at the target level, then ground in the matched nodes' L0 evidence.
+            matched_nodes = retrieve_nodes(conn, query, level=level, top_k=top_k, profile=profile)
+            chunk_ids = candidate_chunk_ids(conn, matched_nodes)
+            hits = (
+                retrieve(conn, query=query, top_k=top_k, profile=profile, restrict_chunk_ids=chunk_ids)
+                if chunk_ids
+                else []
+            )
     finally:
         conn.close()
+
+    matched_payload = [
+        {
+            "node_id": n.node_id,
+            "level": n.level,
+            "node_type": n.node_type,
+            "title": n.title,
+            "centrality": n.centrality,
+            "score": n.score,
+        }
+        for n in matched_nodes
+    ]
 
     provider = get_default_llm_provider() if use_llm else None
     if provider is not None:
@@ -126,43 +152,56 @@ def ask_cmd(
             provider = None
         else:
             if as_json:
-                print(json.dumps(generated_answer_to_dict(gen), indent=2))
+                data = generated_answer_to_dict(gen)
+                if matched_payload:
+                    data["matched_nodes"] = matched_payload
+                print(json.dumps(data, indent=2))
             else:
+                _print_matched_nodes(matched_payload, level)
                 print(format_generated_answer(gen, explain=explain, debug=debug))
             return
 
     # No LLM (disabled or unavailable): deterministic evidence template.
     if as_json:
-        print(
-            json.dumps(
+        data = {
+            "query": query,
+            "model": None,
+            "abstained": not hits,
+            "answer": None,
+            "evidence": [
                 {
-                    "query": query,
-                    "model": None,
-                    "abstained": not hits,
-                    "answer": None,
-                    "evidence": [
-                        {
-                            "evidence_id": f"E{i}",
-                            "source_id": hit.source_id,
-                            "chunk_id": hit.chunk_id,
-                            "source_type": hit.source_type,
-                            "source_uri": hit.source_uri,
-                            "title": hit.title,
-                            "scores": {
-                                "combined": hit.score,
-                                "vector": hit.vector_score,
-                                "lexical": hit.lexical_score,
-                                "recency": hit.recency_score,
-                            },
-                        }
-                        for i, hit in enumerate(hits, start=1)
-                    ],
-                },
-                indent=2,
-            )
-        )
+                    "evidence_id": f"E{i}",
+                    "source_id": hit.source_id,
+                    "chunk_id": hit.chunk_id,
+                    "source_type": hit.source_type,
+                    "source_uri": hit.source_uri,
+                    "title": hit.title,
+                    "scores": {
+                        "combined": hit.score,
+                        "vector": hit.vector_score,
+                        "lexical": hit.lexical_score,
+                        "recency": hit.recency_score,
+                    },
+                }
+                for i, hit in enumerate(hits, start=1)
+            ],
+        }
+        if matched_payload:
+            data["matched_nodes"] = matched_payload
+        print(json.dumps(data, indent=2))
     else:
+        _print_matched_nodes(matched_payload, level)
         print(format_grounded_answer(query, hits, explain=explain or debug))
+
+
+def _print_matched_nodes(matched_payload: list[dict], level: str) -> None:
+    if not matched_payload:
+        return
+    print(f"Matched {level}s:")
+    for node in matched_payload:
+        title = node["title"] or "untitled"
+        print(f"  #{node['node_id']} (score={node['score']:.3f}, centrality={node['centrality']:.3f}): {title}")
+    print()
 
 
 def eval_cmd(
@@ -170,6 +209,7 @@ def eval_cmd(
     query_prefix: str | None = None,
     load_queries_path: Path | None = None,
     profile: str = DEFAULT_PROFILE,
+    level: str = "evidence",
 ) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
@@ -179,12 +219,12 @@ def eval_cmd(
         if load_queries_path is not None:
             queries = load_eval_queries_file(load_queries_path)
             loaded = upsert_eval_queries(conn, queries)
-        summary = run_eval(conn, top_k=top_k, query_prefix=query_prefix, profile=profile)
+        summary = run_eval(conn, top_k=top_k, query_prefix=query_prefix, profile=profile, level=level)
     finally:
         conn.close()
 
     print(f"Evaluation DB: {db_path}")
-    print(f"Retrieval profile: {profile}")
+    print(f"Retrieval level: {level} | profile: {profile}")
     if load_queries_path is not None:
         print(f"Eval queries loaded/upserted: {loaded} from {load_queries_path}")
     if query_prefix:
@@ -214,12 +254,20 @@ def reindex_embeddings_cmd(batch_size: int = 64, model: str | None = None) -> No
         init_db(conn)
         embedded = embed_pending_chunks(conn, provider, batch_size=batch_size)
         total = count_embeddings(conn, model=provider.name)
+        nodes_embedded = 0
+        for node_type, lvl in (("event", 1), ("episode", 2), ("concept", 3)):
+            nodes_embedded += embed_pending_nodes(
+                conn, provider, level=lvl, node_type=node_type, batch_size=batch_size
+            )
+        node_total = count_node_embeddings(conn, model=provider.name)
     finally:
         conn.close()
     print(f"Reindex DB: {db_path}")
     print(f"Model: {provider.name} (dim={provider.dim})")
     print(f"Chunks embedded this run: {embedded}")
     print(f"Total chunks with current-model embeddings: {total}")
+    print(f"Memory nodes embedded this run: {nodes_embedded}")
+    print(f"Total nodes with current-model embeddings: {node_total}")
 
 
 def eval_generation_cmd(
@@ -370,6 +418,68 @@ def memory_stats_cmd() -> None:
         print(f"  dangling edge ids: {dangling}")
 
 
+def concepts_cmd(top: int = 20) -> None:
+    db_path = get_db_path()
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        rows = conn.execute(
+            """
+            SELECT n.id AS id, n.title AS title, n.centrality AS centrality,
+                   COUNT(e.id) AS members
+            FROM memory_nodes n
+            LEFT JOIN memory_edges e
+                ON e.parent_level = 3 AND e.parent_id = n.id AND e.relation = 'contains'
+            WHERE n.level = 3 AND n.node_type = 'concept'
+            GROUP BY n.id
+            ORDER BY n.centrality DESC NULLS LAST, n.id ASC
+            LIMIT ?
+            """,
+            (top,),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        print("No concepts yet. Run `mem build-memory` (needs the embeddings extra).")
+        return
+    print(f"Concepts (top {len(rows)} by centrality):")
+    for row in rows:
+        cen = row["centrality"] if row["centrality"] is not None else 0.0
+        print(f"  #{row['id']} (centrality={cen:.3f}, {row['members']} events): {row['title'] or 'untitled'}")
+
+
+def timeline_cmd(limit: int = 50) -> None:
+    db_path = get_db_path()
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        rows = conn.execute(
+            """
+            SELECT n.id AS id, n.title AS title, n.time_start AS time_start, n.time_end AS time_end,
+                   COUNT(e.id) AS members
+            FROM memory_nodes n
+            LEFT JOIN memory_edges e
+                ON e.parent_level = 2 AND e.parent_id = n.id AND e.relation = 'contains'
+            WHERE n.level = 2 AND n.node_type = 'episode'
+            GROUP BY n.id
+            ORDER BY n.time_start ASC NULLS LAST, n.id ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        print("No episodes yet. Run `mem build-memory`.")
+        return
+    print(f"Timeline ({len(rows)} episodes, oldest first):")
+    for row in rows:
+        start = (row["time_start"] or "?")[:10]
+        end = (row["time_end"] or "?")[:10]
+        span = start if start == end else f"{start}..{end}"
+        print(f"  #{row['id']} [{span}] ({row['members']} events): {row['title'] or 'untitled'}")
+
+
 def seed_sample_cmd(
     workspace_dir: Path,
     force: bool = False,
@@ -415,9 +525,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     profile_choices = sorted(PROFILE_WEIGHTS)
 
+    level_choices = ["evidence", "event", "episode", "concept"]
+
     p_ask = sub.add_parser("ask", help="Query indexed evidence.")
     p_ask.add_argument("query", type=str)
     p_ask.add_argument("--top-k", type=int, default=5)
+    p_ask.add_argument(
+        "--level",
+        choices=level_choices,
+        default="evidence",
+        help="Retrieval level: 'evidence' (L0 chunks, default) or a memory level "
+        "(event/episode/concept), which drills matched nodes down to L0 for grounding.",
+    )
     p_ask.add_argument(
         "--profile",
         choices=profile_choices,
@@ -468,6 +587,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=profile_choices,
         default=DEFAULT_PROFILE,
         help="Hybrid retrieval profile (vector/lexical/recency blend).",
+    )
+    p_eval.add_argument(
+        "--level",
+        choices=level_choices,
+        default="evidence",
+        help="Retrieval level: 'evidence' (default) or a memory level evaluated via drill-down.",
     )
 
     p_reindex = sub.add_parser(
@@ -535,6 +660,12 @@ def build_parser() -> argparse.ArgumentParser:
         "memory-stats",
         help="Show hierarchical memory node/edge counts and structural integrity status.",
     )
+
+    p_concepts = sub.add_parser("concepts", help="List L3 concepts ranked by centrality.")
+    p_concepts.add_argument("--top", type=int, default=20)
+
+    p_timeline = sub.add_parser("timeline", help="List L2 episodes chronologically.")
+    p_timeline.add_argument("--limit", type=int, default=50)
 
     p_seed = sub.add_parser(
         "seed-sample",
@@ -605,6 +736,7 @@ def main() -> None:
             use_llm=not args.no_llm,
             as_json=args.as_json,
             debug=args.debug,
+            level=args.level,
         )
         return
     if args.command == "eval":
@@ -613,6 +745,7 @@ def main() -> None:
             query_prefix=args.query_prefix,
             load_queries_path=args.load_queries,
             profile=args.profile,
+            level=args.level,
         )
         return
     if args.command == "reindex-embeddings":
@@ -631,6 +764,12 @@ def main() -> None:
         return
     if args.command == "memory-stats":
         memory_stats_cmd()
+        return
+    if args.command == "concepts":
+        concepts_cmd(top=args.top)
+        return
+    if args.command == "timeline":
+        timeline_cmd(limit=args.limit)
         return
     if args.command == "seed-sample":
         seed_sample_cmd(args.workspace_dir, force=args.force, db_path=args.db_path)

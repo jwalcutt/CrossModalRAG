@@ -130,15 +130,26 @@ Requires [Ollama](https://ollama.com) running locally with a model pulled
   - `balanced` (default): 0.55 vector + 0.30 lexical + 0.15 recency
   - `relevant`: 0.70 vector + 0.25 lexical + 0.05 recency
   - `recent`: 0.35 vector + 0.20 lexical + 0.45 recency
+- `--level` chooses the retrieval level: `evidence` (default, L0 chunks) or a memory level
+  (`event`/`episode`/`concept`). At a memory level, `ask` retrieves the matching nodes, prints them,
+  then drills them down to their L0 evidence and answers grounded in (and citing) that L0 — so
+  provenance holds regardless of entry level. Memory-level retrieval needs the hierarchy built
+  (`mem build-memory`) and benefits from node embeddings (`mem reindex-embeddings`); without the
+  embeddings extra it ranks nodes lexically.
 - `--explain` prints per-hit score components.
 - `--no-llm` skips synthesis and returns the deterministic evidence template.
-- `--json` emits a structured answer (stable contract for UIs).
+- `--json` emits a structured answer (stable contract for UIs; includes `matched_nodes` at memory levels).
 - `--debug` adds retrieval diagnostics plus the raw prompt and model output.
+
+```bash
+mem ask "what are the themes of this project?" --level concept   # retrieve concepts, answer from their L0 evidence
+```
 
 7. Run retrieval evaluation (using seeded sample queries or your own `queries_eval` rows):
 
 ```bash
-mem eval --top-k 5 --profile relevant
+mem eval --top-k 5 --profile relevant                 # evidence-level recall/MRR
+mem eval --top-k 5 --level concept                    # drill-down recall via the concept layer
 ```
 
 8. Evaluate grounded answer quality (citation faithfulness, requires Ollama):
@@ -158,12 +169,14 @@ unanswerable ones). Queries with empty `expected_source_uris` are treated as neg
 - `mem seed-sample [--workspace-dir PATH] [--force]`
 - `mem ingest-notes [<vault_path> ...]` (falls back to `.env` `OBSIDIAN_VAULT_PATH_*`)
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
-- `mem ask "<query>" [--top-k N] [--profile balanced|relevant|recent] [--explain] [--no-llm] [--json] [--debug]`
-- `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...]`
+- `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent] [--explain] [--no-llm] [--json] [--debug]`
+- `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
 - `mem build-memory [--level event|episode|concept|graph|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts need the `[embeddings]` extra; graph needs neither)
 - `mem memory-stats`
+- `mem concepts [--top N]` (L3 concepts by centrality)
+- `mem timeline [--limit N]` (L2 episodes, oldest first)
 
 ## Hierarchical Memory (experimental)
 
@@ -196,6 +209,11 @@ mem build-memory --level concept     # only L3 concepts (needs the embeddings ex
 mem build-memory --level graph       # only centrality + concept co-occurrence (no LLM/embeddings)
 mem memory-stats                     # node/edge counts, co-occurrence edges, top central nodes, integrity
 ```
+
+Once built and embedded (`mem reindex-embeddings` now also embeds memory nodes), the hierarchy is
+queryable: `mem ask --level concept|episode|event` retrieves at that level and answers grounded in
+the drilled-down L0 evidence, and `mem concepts` / `mem timeline` browse the concept and episode
+layers. Node ranking blends semantic + lexical + recency + centrality.
 
 All layers are deterministic and incremental: L1 sources are re-extracted only when content,
 model, or prompt version changes; L2/L3 are reconciled by membership so re-running on unchanged

@@ -41,6 +41,7 @@ def run_eval(
     top_k: int = 5,
     query_prefix: str | None = None,
     profile: str = DEFAULT_PROFILE,
+    level: str = "evidence",
 ) -> EvalSummary:
     queries = list_eval_queries(conn, query_prefix=query_prefix)
     results: list[EvalQueryResult] = []
@@ -49,8 +50,15 @@ def run_eval(
         # carry no expected URIs and are evaluated by generation eval instead.
         if not query.expected_source_uris:
             continue
-        hits = retrieve(conn, query=query.query_text, top_k=top_k, profile=profile)
-        retrieved_source_uris = _unique_source_uris_in_order([hit.source_uri for hit in hits])
+        if level == "evidence":
+            hits = retrieve(conn, query=query.query_text, top_k=top_k, profile=profile)
+            retrieved_source_uris = _unique_source_uris_in_order([hit.source_uri for hit in hits])
+        else:
+            # Level-targeted retrieval + drill-down: recover L0 sources via the matched nodes.
+            from crossmodalrag.retrieve.nodes import drilldown_source_uris, retrieve_nodes
+
+            node_hits = retrieve_nodes(conn, query.query_text, level=level, top_k=top_k, profile=profile)
+            retrieved_source_uris = drilldown_source_uris(conn, node_hits)
         first_correct_rank = _first_correct_rank(retrieved_source_uris, set(query.expected_source_uris))
         results.append(
             EvalQueryResult(
