@@ -10,6 +10,7 @@ from crossmodalrag.config import (
     get_extract_model,
     get_numbered_env_paths,
     load_dotenv,
+    usage_tracking_enabled,
 )
 from crossmodalrag.db import connect, init_db
 from crossmodalrag.embed.provider import (
@@ -160,9 +161,13 @@ def ask_cmd(
     debug: bool = False,
     level: str = "evidence",
     modalities: list[str] | None = None,
+    accept: bool = False,
+    track: bool | None = None,
 ) -> None:
     db_path = get_db_path()
     restrict_source_types = resolve_source_types(modalities)
+    # Usage tracking is opt-in: off unless enabled by env / --track / --accept, and never by --no-track.
+    track_enabled = False if track is False else (bool(track) or accept or usage_tracking_enabled())
     conn = connect(db_path)
     matched_nodes = []
     try:
@@ -221,6 +226,14 @@ def ask_cmd(
             else:
                 _print_matched_nodes(matched_payload, level)
                 print(format_generated_answer(gen, explain=explain, debug=debug))
+            if track_enabled and not gen.abstained:
+                cited = [gen.id_map[eid].chunk_id for eid in gen.cited_evidence_ids if eid in gen.id_map]
+                _track_ask(
+                    db_path,
+                    hits=hits,
+                    matched_nodes=matched_nodes,
+                    accepted_chunk_ids=(cited or [h.chunk_id for h in hits]) if accept else [],
+                )
             return
 
     # No LLM (disabled or unavailable): deterministic evidence template.
@@ -261,6 +274,38 @@ def ask_cmd(
     else:
         _print_matched_nodes(matched_payload, level)
         print(format_grounded_answer(query, hits, explain=explain or debug))
+
+    # No-LLM / fallback path: the template shows `hits` directly; no citations to scope `--accept`.
+    if track_enabled and hits:
+        _track_ask(
+            db_path,
+            hits=hits,
+            matched_nodes=matched_nodes,
+            accepted_chunk_ids=[h.chunk_id for h in hits] if accept else [],
+        )
+
+
+def _track_ask(db_path, *, hits, matched_nodes, accepted_chunk_ids) -> None:
+    """Best-effort usage tracking for an `ask` (never raises into the command path)."""
+    from datetime import datetime, timezone
+
+    from crossmodalrag.usage.tracking import record_ask_interaction
+
+    try:
+        conn = connect(db_path)
+        try:
+            init_db(conn)
+            record_ask_interaction(
+                conn,
+                now=datetime.now(timezone.utc),
+                retrieved_chunk_ids=[h.chunk_id for h in hits],
+                accepted_chunk_ids=accepted_chunk_ids,
+                opened_node_ids=[n.node_id for n in matched_nodes],
+            )
+        finally:
+            conn.close()
+    except Exception as exc:  # pragma: no cover - tracking must never break a query
+        print(f"[notice] usage tracking skipped: {exc}", file=sys.stderr)
 
 
 def _print_matched_nodes(matched_payload: list[dict], level: str) -> None:
@@ -498,6 +543,44 @@ def memory_stats_cmd() -> None:
         print(f"  dangling edge ids: {dangling}")
 
 
+def usage_cmd(clear: bool = False, top: int = 10) -> None:
+    from datetime import datetime, timezone
+
+    from crossmodalrag.config import get_usage_halflife_days, usage_tracking_enabled
+    from crossmodalrag.usage.store import clear_usage_events, usage_summaries
+
+    db_path = get_db_path()
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        if clear:
+            deleted = clear_usage_events(conn)
+            print(f"Cleared {deleted} usage event(s) from {db_path}.")
+            return
+
+        total = conn.execute("SELECT COUNT(*) AS n FROM usage_events").fetchone()["n"]
+        by_type = conn.execute(
+            "SELECT event_type, COUNT(*) AS n FROM usage_events GROUP BY event_type ORDER BY event_type"
+        ).fetchall()
+        summaries = usage_summaries(
+            conn, now=datetime.now(timezone.utc), halflife_days=get_usage_halflife_days()
+        )
+    finally:
+        conn.close()
+
+    print(f"Usage DB: {db_path}")
+    print(f"Tracking enabled (env): {usage_tracking_enabled()}")
+    print(f"Total usage events: {total}")
+    if by_type:
+        print("By type: " + ", ".join(f"{r['event_type']}={r['n']}" for r in by_type))
+    top_targets = sorted(summaries.values(), key=lambda s: s.strength, reverse=True)[:top]
+    if top_targets:
+        print(f"Top {len(top_targets)} targets by rehearsal strength:")
+        for s in top_targets:
+            print(f"  {s.target_kind} #{s.target_id}: strength={s.strength:.3f} "
+                  f"events={s.count} last={s.last_event_at}")
+
+
 def concepts_cmd(top: int = 20) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
@@ -669,6 +752,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict evidence to one or more modalities (repeatable). "
         "Maps to source types: text=notes, code=git, pdf=PDFs, image=OCR'd images.",
     )
+    p_ask.add_argument(
+        "--accept",
+        action="store_true",
+        help="Record this answer as accepted (usage feedback on the cited evidence); enables tracking.",
+    )
+    p_ask.add_argument(
+        "--track",
+        action="store_true",
+        help="Log usage events for this query (overrides CMRAG_USAGE_TRACKING for the call).",
+    )
+    p_ask.add_argument(
+        "--no-track",
+        action="store_true",
+        help="Do not log usage events for this query, even if tracking is enabled by env.",
+    )
 
     p_eval = sub.add_parser(
         "eval",
@@ -786,6 +884,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_timeline = sub.add_parser("timeline", help="List L2 episodes chronologically.")
     p_timeline.add_argument("--limit", type=int, default=50)
 
+    p_usage = sub.add_parser(
+        "usage",
+        help="Show local usage-tracking stats (read-only), or --clear to wipe usage history.",
+    )
+    p_usage.add_argument("--clear", action="store_true", help="Delete all usage events (local).")
+    p_usage.add_argument("--top", type=int, default=10, help="How many top targets to show.")
+
     p_seed = sub.add_parser(
         "seed-sample",
         help="Create deterministic synthetic notes/git fixtures and ingest them into the DB.",
@@ -875,6 +980,7 @@ def main() -> None:
         ingest_images_cmd(image_paths)
         return
     if args.command == "ask":
+        track = True if args.track else (False if args.no_track else None)
         ask_cmd(
             args.query,
             top_k=args.top_k,
@@ -885,6 +991,8 @@ def main() -> None:
             debug=args.debug,
             level=args.level,
             modalities=args.modality,
+            accept=args.accept,
+            track=track,
         )
         return
     if args.command == "eval":
@@ -920,6 +1028,9 @@ def main() -> None:
         return
     if args.command == "timeline":
         timeline_cmd(limit=args.limit)
+        return
+    if args.command == "usage":
+        usage_cmd(clear=args.clear, top=args.top)
         return
     if args.command == "seed-sample":
         seed_sample_cmd(args.workspace_dir, force=args.force, db_path=args.db_path)

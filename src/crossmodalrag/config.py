@@ -88,6 +88,16 @@ def get_usage_saturation() -> float:
     return value if value > 0 else 3.0
 
 
+def usage_tracking_enabled() -> bool:
+    """Whether `mem ask` logs interaction events to usage_events. OFF by default (opt-in).
+
+    Privacy/local-first: only target id + event type + time are stored (never query text), and
+    history is clearable via `mem usage --clear`. Enable with CMRAG_USAGE_TRACKING=on (or per-call
+    `mem ask --track` / `--accept`).
+    """
+    return os.getenv("CMRAG_USAGE_TRACKING", "off").strip().lower() in {"on", "1", "true", "yes"}
+
+
 def get_min_evidence_score() -> float:
     raw = os.getenv("CMRAG_MIN_EVIDENCE_SCORE", "0.15").strip()
     try:

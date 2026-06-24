@@ -13,6 +13,7 @@ from crossmodalrag.usage.store import (
     record_usage_event,
     usage_summaries,
 )
+from crossmodalrag.usage.tracking import record_ask_interaction
 from crossmodalrag.usage.strength import (
     EVENT_TYPES,
     EVENT_WEIGHTS,
@@ -35,6 +36,7 @@ __all__ = [
     "default_weight",
     "list_usage_events",
     "normalize_strength",
+    "record_ask_interaction",
     "record_usage_event",
     "rehearsal_strength",
     "summarize",

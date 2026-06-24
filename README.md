@@ -175,6 +175,14 @@ Requires [Ollama](https://ollama.com) running locally with a model pulled
     candidates (never surfaces irrelevant ones) and needs embeddings + a usage history
     (`CMRAG_USAGE_HALFLIFE_DAYS`, `CMRAG_USAGE_SATURATION`). `--explain`/`--json` expose a `usage`
     score component.
+- **Usage tracking is opt-in and private.** The `usage` profile's history comes from real `mem ask`
+  interactions, but tracking is **off by default**. Enable it with `CMRAG_USAGE_TRACKING=on`, or
+  per-call with `mem ask … --track` (logs `retrieval_hit` for the evidence shown) and
+  `mem ask … --accept` (also logs `accepted_answer` for the cited evidence; implies `--track`).
+  `mem ask … --level …` additionally logs an `open` event for the memory nodes drilled into.
+  `--no-track` suppresses logging for a call. Only the target id + event type + time are stored —
+  **never your query text** — and everything stays local. Inspect with `mem usage`; wipe with
+  `mem usage --clear`.
 - `--level` chooses the retrieval level: `evidence` (default, L0 chunks) or a memory level
   (`event`/`episode`/`concept`). At a memory level, `ask` retrieves the matching nodes, prints them,
   then drills them down to their L0 evidence and answers grounded in (and citing) that L0 — so
@@ -234,7 +242,8 @@ checks for measuring no regression.
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
 - `mem ingest-pdf [<path> ...]` (file or directory; falls back to `.env` `PDF_PATH_*`; requires the `[pdf]` extra)
 - `mem ingest-images [<path> ...]` (file or directory; falls back to `.env` `IMAGE_PATH_*`; requires the `[ocr]` extra + a tesseract binary)
-- `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent|usage] [--modality text|code|pdf|image ...] [--explain] [--no-llm] [--json] [--debug]`
+- `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent|usage] [--modality text|code|pdf|image ...] [--explain] [--no-llm] [--json] [--debug] [--track|--no-track] [--accept]`
+- `mem usage [--clear] [--top N]` (local usage-tracking stats; `--clear` wipes the history)
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...] [--modality text|code|pdf|image ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
