@@ -580,7 +580,8 @@ def seed_sample_cmd(
         "Inserted chunks "
         f"(notes={result.notes_chunks_inserted}, git={result.git_chunks_inserted}, "
         f"pdf={result.pdf_chunks_inserted}, image={result.image_chunks_inserted}); "
-        f"eval queries upserted={result.eval_queries_upserted}"
+        f"eval queries upserted={result.eval_queries_upserted}; "
+        f"usage events seeded={result.usage_events_seeded}"
     )
 
 

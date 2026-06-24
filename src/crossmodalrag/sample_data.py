@@ -13,6 +13,7 @@ from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.image import ingest_images
 from crossmodalrag.ingest.notes import ingest_notes
 from crossmodalrag.ingest.pdf import ingest_pdf
+from crossmodalrag.usage.store import clear_usage_events, record_usage_event
 
 SAMPLE_AUTHOR_NAME = "Test User"
 SAMPLE_AUTHOR_EMAIL = "test@example.com"
@@ -29,6 +30,7 @@ class SeedSampleResult:
     eval_queries_upserted: int
     pdf_chunks_inserted: int = 0
     image_chunks_inserted: int = 0
+    usage_events_seeded: int = 0
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,10 @@ def seed_sample_data(
     # without it the [sample-xmodal-*] image queries stay at their ~0 baseline.
     image_chunks_inserted = ingest_images(conn, image_path=vault_dir) if has_ocr() else 0
     eval_queries_upserted = _seed_eval_queries(conn, vault_dir=vault_dir, repo_dir=repo_dir)
+    # a deterministic synthetic usage history (reconcile-idempotent) so the time/usage
+    # signal is measurable before it's wired into ranking. Separable: never affects
+    # ingestion determinism or fingerprints.
+    usage_events_seeded = _seed_usage(conn, vault_dir=vault_dir)
     conn.commit()
 
     return SeedSampleResult(
@@ -82,6 +88,7 @@ def seed_sample_data(
         eval_queries_upserted=eval_queries_upserted,
         pdf_chunks_inserted=pdf_chunks_inserted,
         image_chunks_inserted=image_chunks_inserted,
+        usage_events_seeded=usage_events_seeded,
     )
 
 
@@ -108,6 +115,15 @@ def purge_seeded_sample_data(conn: sqlite3.Connection, *, workspace_dir: Path) -
     source_rows_deleted = 0
     if source_ids:
         placeholders = ",".join("?" for _ in source_ids)
+        # Clear usage events for these chunks first, so none are orphaned by the chunk delete.
+        chunk_ids = [
+            int(r["id"])
+            for r in conn.execute(
+                f"SELECT id FROM evidence_chunks WHERE source_id IN ({placeholders})",
+                tuple(source_ids),
+            ).fetchall()
+        ]
+        clear_usage_events(conn, target_kind="chunk", target_ids=chunk_ids)
         chunk_rows_deleted = conn.execute(
             f"DELETE FROM evidence_chunks WHERE source_id IN ({placeholders})",
             tuple(source_ids),
@@ -195,8 +211,8 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
     note_retro_uri = str((vault_dir / "retros" / "2026-01-14.md").resolve())
     scaffold_sha = _git_rev_parse_subject(repo_dir, "cli: add sample seeding command scaffold")
 
-    # Cross-modal fixtures (Phase 3). These are materialized into the vault now, but
-    # not ingested until Phase 3 steps 2-3 — so these queries score ~0 recall today.
+    # Cross-modal fixtures. These are materialized into the vault now, but
+    # not ingested yet — so these queries score ~0 recall today.
     # That failing baseline is intentional: it is what the native-embedding gate is
     # measured against once OCR-text-first ingestion exists.
     pdf_spec_uri = str((vault_dir / "documents" / "spec.pdf").resolve())
@@ -304,6 +320,62 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
         for dup in existing[1:]:
             conn.execute("DELETE FROM queries_eval WHERE id = ?", (int(dup["id"]),))
     return len(rows)
+
+
+# Deterministic synthetic usage history. Fixed (source_uri, [(event_type,
+# event_at)]) so re-seeding is reconcile-idempotent. One heavily-reinforced source and one
+# stale source, so the time/usage signal has contrast for measurement.
+def _usage_seed_plan(vault_dir: Path) -> list[tuple[str, list[tuple[str, str]]]]:
+    note_project_uri = str((vault_dir / "projects" / "crossmodalrag.md").resolve())
+    note_retro_uri = str((vault_dir / "retros" / "2026-01-14.md").resolve())
+    return [
+        # Heavily reinforced, recent: retrieved, opened, then accepted in an answer.
+        (
+            note_project_uri,
+            [
+                ("retrieval_hit", "2026-06-01T00:00:00+00:00"),
+                ("open", "2026-06-10T00:00:00+00:00"),
+                ("accepted_answer", "2026-06-20T00:00:00+00:00"),
+            ],
+        ),
+        # Stale: a single old retrieval, long un-rehearsed.
+        (note_retro_uri, [("retrieval_hit", "2026-01-15T00:00:00+00:00")]),
+    ]
+
+
+def _first_chunk_id_for_uri(conn: sqlite3.Connection, source_uri: str) -> int | None:
+    row = conn.execute(
+        """
+        SELECT c.id AS id
+        FROM evidence_chunks c JOIN sources s ON s.id = c.source_id
+        WHERE s.source_uri = ?
+        ORDER BY c.id ASC LIMIT 1
+        """,
+        (source_uri,),
+    ).fetchone()
+    return int(row["id"]) if row is not None else None
+
+
+def _seed_usage(conn: sqlite3.Connection, *, vault_dir: Path) -> int:
+    """Seed a fixed synthetic usage history on sample chunks (reconcile-idempotent)."""
+    plan = _usage_seed_plan(vault_dir)
+    target_ids: list[int] = []
+    resolved: list[tuple[int, list[tuple[str, str]]]] = []
+    for source_uri, events in plan:
+        chunk_id = _first_chunk_id_for_uri(conn, source_uri)
+        if chunk_id is None:
+            continue
+        target_ids.append(chunk_id)
+        resolved.append((chunk_id, events))
+
+    # Reconcile: clear this run's targets, then insert the fixed set -> identical state on re-seed.
+    clear_usage_events(conn, target_kind="chunk", target_ids=target_ids)
+    seeded = 0
+    for chunk_id, events in resolved:
+        for event_type, event_at in events:
+            record_usage_event(conn, "chunk", chunk_id, event_type, event_at=event_at)
+            seeded += 1
+    return seeded
 
 
 def _sample_seed_fixtures_root() -> Path:

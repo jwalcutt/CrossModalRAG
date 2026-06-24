@@ -20,6 +20,7 @@ def test_seed_sample_data_is_reusable_and_idempotent(tmp_path: Path) -> None:
         assert first.notes_chunks_inserted > 0
         assert first.git_chunks_inserted > 0
         assert first.eval_queries_upserted == 10
+        assert first.usage_events_seeded == 4  # deterministic synthetic usage history
         assert (first.vault_dir / "projects" / "crossmodalrag.md").exists()
         assert (first.repo_dir / ".git").exists()
 
@@ -28,6 +29,8 @@ def test_seed_sample_data_is_reusable_and_idempotent(tmp_path: Path) -> None:
         assert any(hit.source_type == "git_commit" for hit in hits)
 
         baseline = _seed_snapshot(conn)
+
+        usage_before = _usage_snapshot(conn)
 
         second = seed_sample_data(conn, workspace_dir=workspace_dir)
         assert second.notes_chunks_inserted == 0
@@ -38,8 +41,18 @@ def test_seed_sample_data_is_reusable_and_idempotent(tmp_path: Path) -> None:
         assert second.eval_queries_upserted == 10
 
         assert _seed_snapshot(conn) == baseline
+        # Usage seeding is reconcile-idempotent: re-seed leaves an identical event set.
+        assert _usage_snapshot(conn) == usage_before
     finally:
         conn.close()
+
+
+def _usage_snapshot(conn):
+    rows = conn.execute(
+        "SELECT target_kind, target_id, event_type, weight, event_at FROM usage_events "
+        "ORDER BY target_kind, target_id, event_at, event_type"
+    ).fetchall()
+    return [tuple(row) for row in rows]
 
 
 def test_cli_parser_accepts_seed_sample_command() -> None:
@@ -97,10 +110,14 @@ def test_purge_seeded_sample_data_removes_only_sample_rows(tmp_path: Path) -> No
         )
         conn.commit()
 
+        assert conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 4  # seeded
+
         result = purge_seeded_sample_data(conn, workspace_dir=workspace_dir)
         assert result.source_rows_deleted > 0
         assert result.chunk_rows_deleted > 0
         assert result.eval_rows_deleted == 10
+        # Seeded usage is cleared with the sample chunks (no orphaned usage events).
+        assert conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 0
 
         remaining_sources = conn.execute(
             "SELECT source_uri FROM sources ORDER BY id"

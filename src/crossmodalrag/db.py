@@ -102,6 +102,25 @@ CREATE TABLE IF NOT EXISTS queries_eval (
     expected_source_uris TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- append-only usage signal (interaction history). Additive and SEPARABLE — it is
+-- never part of any content/derivation fingerprint, so clearing it restores the exact
+-- baseline. Endpoints are polymorphic (target_kind 'chunk' -> evidence_chunks.id,
+-- 'node' -> memory_nodes.id) so there is NO DB-level FK (SQLite can't FK to two tables);
+-- integrity is enforced in app code + tests, mirroring memory_edges. ``event_at`` is the
+-- (injectable) time the event happened, used for time-decay; ``created_at`` is audit only.
+CREATE TABLE IF NOT EXISTS usage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_kind TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 1.0,
+    event_at TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_target ON usage_events(target_kind, target_id);
+CREATE INDEX IF NOT EXISTS idx_usage_events_event_at ON usage_events(event_at);
 """
 
 

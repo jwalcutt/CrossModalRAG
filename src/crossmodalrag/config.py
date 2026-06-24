@@ -68,6 +68,16 @@ def get_concept_sim_threshold() -> float:
         return 0.60
 
 
+def get_usage_halflife_days() -> float:
+    """Half-life (days) for the usage rehearsal-strength decay. Default 30."""
+    raw = os.getenv("CMRAG_USAGE_HALFLIFE_DAYS", "30").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 30.0
+    return value if value > 0 else 30.0
+
+
 def get_min_evidence_score() -> float:
     raw = os.getenv("CMRAG_MIN_EVIDENCE_SCORE", "0.15").strip()
     try:
