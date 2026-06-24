@@ -10,10 +10,13 @@ from crossmodalrag.memory.store import resolve_to_evidence
 from crossmodalrag.retrieve import lexical
 
 # Node-level profile weights: (vector, lexical, recency, centrality). Each sums to 1.0.
+# `usage` mirrors `relevant` here: node-level usage is deferred (seeded usage is chunk-level,
+# and chunk usage still applies on drill-down), so centrality remains the node importance term.
 NODE_PROFILE_WEIGHTS: dict[str, tuple[float, float, float, float]] = {
     "balanced": (0.55, 0.25, 0.10, 0.10),
     "relevant": (0.70, 0.20, 0.05, 0.05),
     "recent": (0.30, 0.20, 0.40, 0.10),
+    "usage": (0.70, 0.20, 0.05, 0.05),
 }
 DEFAULT_PROFILE = "balanced"
 

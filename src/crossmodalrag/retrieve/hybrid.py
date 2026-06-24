@@ -9,11 +9,14 @@ from crossmodalrag.retrieve.lexical import RetrievalHit
 from crossmodalrag.retrieve.vector import has_vectors_for_model, vector_retrieve
 
 
-# Profile weights: (vector, lexical, recency). Must each sum to 1.0.
-PROFILE_WEIGHTS: dict[str, tuple[float, float, float]] = {
-    "balanced": (0.55, 0.30, 0.15),
-    "relevant": (0.70, 0.25, 0.05),
-    "recent": (0.35, 0.20, 0.45),
+# Profile weights: (vector, lexical, recency, usage). Each sums to 1.0. The `usage` term
+# (rehearsal strength) is 0 for every profile except `usage`, so existing profiles are
+# byte-identical to before — usage-aware ranking is strictly opt-in via `--profile usage`.
+PROFILE_WEIGHTS: dict[str, tuple[float, float, float, float]] = {
+    "balanced": (0.55, 0.30, 0.15, 0.0),
+    "relevant": (0.70, 0.25, 0.05, 0.0),
+    "recent": (0.35, 0.20, 0.45, 0.0),
+    "usage": (0.55, 0.25, 0.05, 0.15),
 }
 
 DEFAULT_PROFILE = "balanced"
@@ -27,6 +30,7 @@ def retrieve(
     provider: EmbeddingProvider | None = None,
     restrict_chunk_ids: set[int] | None = None,
     restrict_source_types: set[str] | None = None,
+    now: datetime | None = None,
 ) -> list[RetrievalHit]:
     """Hybrid retrieval blending semantic, lexical, and recency signals.
 
@@ -57,8 +61,21 @@ def retrieve(
     # Pull a generous vector candidate pool so good semantic matches survive blending.
     vector_sims = vector_retrieve(conn, query_vector, model=provider.name, top_k=max(top_k * 10, 50))
 
-    w_vec, w_lex, w_rec = PROFILE_WEIGHTS[profile]
-    now = datetime.now(timezone.utc)
+    w_vec, w_lex, w_rec, w_usage = PROFILE_WEIGHTS[profile]
+    now = now or datetime.now(timezone.utc)
+
+    # Usage (rehearsal strength) is loaded only when the profile asks for it (opt-in).
+    usage_strengths: dict[int, float] = {}
+    if w_usage > 0:
+        from crossmodalrag.config import get_usage_halflife_days
+        from crossmodalrag.usage.store import usage_summaries
+
+        summaries = usage_summaries(conn, now=now, halflife_days=get_usage_halflife_days())
+        usage_strengths = {
+            target_id: summary.strength
+            for (kind, target_id), summary in summaries.items()
+            if kind == "chunk"
+        }
 
     rows = conn.execute(
         """
@@ -95,7 +112,18 @@ def retrieve(
 
         vec_norm = ((cosine + 1.0) / 2.0) if cosine is not None else 0.0
         recency = lexical.recency_score(row["source_timestamp"], now=now)
-        score = (w_vec * vec_norm) + (w_lex * lex) + (w_rec * recency)
+        # Usage only re-ranks candidates that already have semantic/lexical signal (the
+        # `continue` guard above) — it can never surface an irrelevant item, which also
+        # bounds the retrieve->boost->retrieve feedback loop.
+        usage_norm = 0.0
+        if w_usage > 0:
+            from crossmodalrag.config import get_usage_saturation
+            from crossmodalrag.usage.strength import normalize_strength
+
+            usage_norm = normalize_strength(
+                usage_strengths.get(chunk_id, 0.0), saturation=get_usage_saturation()
+            )
+        score = (w_vec * vec_norm) + (w_lex * lex) + (w_rec * recency) + (w_usage * usage_norm)
         hits.append(
             RetrievalHit(
                 chunk_id=chunk_id,
@@ -111,6 +139,7 @@ def retrieve(
                 recency_score=recency,
                 vector_score=vec_norm,
                 chunk_metadata_json=row["chunk_metadata_json"],
+                usage_score=usage_norm,
             )
         )
 

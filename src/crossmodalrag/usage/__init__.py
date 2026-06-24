@@ -20,6 +20,7 @@ from crossmodalrag.usage.strength import (
     UsageEvent,
     UsageSummary,
     default_weight,
+    normalize_strength,
     rehearsal_strength,
     summarize,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "clear_usage_events",
     "default_weight",
     "list_usage_events",
+    "normalize_strength",
     "record_usage_event",
     "rehearsal_strength",
     "summarize",

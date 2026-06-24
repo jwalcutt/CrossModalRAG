@@ -78,6 +78,16 @@ def get_usage_halflife_days() -> float:
     return value if value > 0 else 30.0
 
 
+def get_usage_saturation() -> float:
+    """Half-saturation point mapping usage strength into [0,1) for the `usage` profile. Default 3.0."""
+    raw = os.getenv("CMRAG_USAGE_SATURATION", "3").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 3.0
+    return value if value > 0 else 3.0
+
+
 def get_min_evidence_score() -> float:
     raw = os.getenv("CMRAG_MIN_EVIDENCE_SCORE", "0.15").strip()
     try:

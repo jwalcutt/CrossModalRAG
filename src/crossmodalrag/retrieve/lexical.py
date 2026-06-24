@@ -26,6 +26,7 @@ class RetrievalHit:
     recency_score: float
     vector_score: float = 0.0
     chunk_metadata_json: str | None = None
+    usage_score: float = 0.0
 
 
 def retrieve(

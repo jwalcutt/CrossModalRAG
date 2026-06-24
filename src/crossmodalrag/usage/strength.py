@@ -52,6 +52,18 @@ def default_weight(event_type: str) -> float:
     return EVENT_WEIGHTS.get(event_type, 1.0)
 
 
+def normalize_strength(strength: float, *, saturation: float) -> float:
+    """Map an unbounded rehearsal strength into [0, 1) for blending into a score.
+
+    Saturating (``strength / (strength + saturation)``): 0 -> 0, diminishing returns as
+    strength grows, deterministic and pool-independent. ``saturation`` sets how much
+    strength counts as "well rehearsed" (the half-saturation point).
+    """
+    if strength <= 0 or saturation <= 0:
+        return 0.0
+    return strength / (strength + saturation)
+
+
 def _parse(ts: str | None) -> datetime | None:
     if not ts:
         return None

@@ -165,10 +165,16 @@ automatically falls back to the deterministic evidence template.
 Requires [Ollama](https://ollama.com) running locally with a model pulled
 (`ollama pull gemma4`). Swap models anytime via `CMRAG_LLM_MODEL`.
 
-- `--profile` selects the hybrid retrieval blend of semantic / lexical / recency:
+- `--profile` selects the hybrid retrieval blend of semantic / lexical / recency / usage:
   - `balanced` (default): 0.55 vector + 0.30 lexical + 0.15 recency
   - `relevant`: 0.70 vector + 0.25 lexical + 0.05 recency
   - `recent`: 0.35 vector + 0.20 lexical + 0.45 recency
+  - `usage`: 0.55 vector + 0.25 lexical + 0.05 recency + **0.15 usage** (rehearsal strength) — an
+    **opt-in** time/usage-aware profile that promotes memories you've used recently/often. The usage
+    term is 0 in every other profile, so they are unchanged. It re-ranks only already-relevant
+    candidates (never surfaces irrelevant ones) and needs embeddings + a usage history
+    (`CMRAG_USAGE_HALFLIFE_DAYS`, `CMRAG_USAGE_SATURATION`). `--explain`/`--json` expose a `usage`
+    score component.
 - `--level` chooses the retrieval level: `evidence` (default, L0 chunks) or a memory level
   (`event`/`episode`/`concept`). At a memory level, `ask` retrieves the matching nodes, prints them,
   then drills them down to their L0 evidence and answers grounded in (and citing) that L0 — so
@@ -228,7 +234,7 @@ checks for measuring no regression.
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
 - `mem ingest-pdf [<path> ...]` (file or directory; falls back to `.env` `PDF_PATH_*`; requires the `[pdf]` extra)
 - `mem ingest-images [<path> ...]` (file or directory; falls back to `.env` `IMAGE_PATH_*`; requires the `[ocr]` extra + a tesseract binary)
-- `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent] [--modality text|code|pdf|image ...] [--explain] [--no-llm] [--json] [--debug]`
+- `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent|usage] [--modality text|code|pdf|image ...] [--explain] [--no-llm] [--json] [--debug]`
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...] [--modality text|code|pdf|image ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)

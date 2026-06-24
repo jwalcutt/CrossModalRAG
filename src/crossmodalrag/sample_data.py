@@ -286,6 +286,15 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
             "processing box?",
             json.dumps([diagram_uri]),
         ),
+        (
+            # Usage slice: gold is the heavily-reinforced project note (see
+            # _seed_usage). Exercises `mem eval --profile usage`; on this tiny corpus the
+            # usage-vs-relevant delta is directional — the rerank mechanism is proven by
+            # tests/test_usage_scoring.py.
+            "[sample-usage] Where is the pipeline integrity smoke-test plan and eval workflow "
+            "documented?",
+            json.dumps([note_project_uri]),
+        ),
     ]
     for query_text, expected_source_uris in rows:
         existing = conn.execute(
@@ -343,31 +352,34 @@ def _usage_seed_plan(vault_dir: Path) -> list[tuple[str, list[tuple[str, str]]]]
     ]
 
 
-def _first_chunk_id_for_uri(conn: sqlite3.Connection, source_uri: str) -> int | None:
-    row = conn.execute(
+def _chunk_ids_for_uri(conn: sqlite3.Connection, source_uri: str) -> list[int]:
+    rows = conn.execute(
         """
         SELECT c.id AS id
         FROM evidence_chunks c JOIN sources s ON s.id = c.source_id
         WHERE s.source_uri = ?
-        ORDER BY c.id ASC LIMIT 1
+        ORDER BY c.id ASC
         """,
         (source_uri,),
-    ).fetchone()
-    return int(row["id"]) if row is not None else None
+    ).fetchall()
+    return [int(r["id"]) for r in rows]
 
 
 def _seed_usage(conn: sqlite3.Connection, *, vault_dir: Path) -> int:
-    """Seed a fixed synthetic usage history on sample chunks (reconcile-idempotent)."""
+    """Seed a fixed synthetic usage history on sample chunks (reconcile-idempotent).
+
+    The event set for each planned source is applied to ALL of that source's chunks, so
+    whichever chunk a query retrieves carries the source's usage signal (a coherent stand-in
+    for "this note has been heavily used"). In production, real per-chunk hit events make
+    chunk-level usage self-consistent without this broadcast.
+    """
     plan = _usage_seed_plan(vault_dir)
-    target_ids: list[int] = []
     resolved: list[tuple[int, list[tuple[str, str]]]] = []
     for source_uri, events in plan:
-        chunk_id = _first_chunk_id_for_uri(conn, source_uri)
-        if chunk_id is None:
-            continue
-        target_ids.append(chunk_id)
-        resolved.append((chunk_id, events))
+        for chunk_id in _chunk_ids_for_uri(conn, source_uri):
+            resolved.append((chunk_id, events))
 
+    target_ids = [chunk_id for chunk_id, _ in resolved]
     # Reconcile: clear this run's targets, then insert the fixed set -> identical state on re-seed.
     clear_usage_events(conn, target_kind="chunk", target_ids=target_ids)
     seeded = 0

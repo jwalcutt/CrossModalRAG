@@ -49,7 +49,8 @@ def format_grounded_answer(query: str, hits: list[RetrievalHit], explain: bool =
                 f"   Scores: combined={hit.score:.3f} "
                 f"vector={hit.vector_score:.3f} "
                 f"lexical={hit.lexical_score:.3f} "
-                f"recency={hit.recency_score:.3f}"
+                f"recency={hit.recency_score:.3f} "
+                f"usage={hit.usage_score:.3f}"
             )
         lines.append(f"   Excerpt: {preview}")
     return "\n".join(lines)
@@ -84,7 +85,8 @@ def format_generated_answer(gen: GeneratedAnswer, explain: bool = False, debug: 
             if explain or debug:
                 lines.append(
                     f"      scores: combined={hit.score:.3f} vector={hit.vector_score:.3f} "
-                    f"lexical={hit.lexical_score:.3f} recency={hit.recency_score:.3f}"
+                    f"lexical={hit.lexical_score:.3f} recency={hit.recency_score:.3f} "
+                    f"usage={hit.usage_score:.3f}"
                 )
             lines.append(f"      excerpt: {_preview(hit.chunk_text)}")
 
@@ -126,6 +128,7 @@ def generated_answer_to_dict(gen: GeneratedAnswer) -> dict:
                     "vector": hit.vector_score,
                     "lexical": hit.lexical_score,
                     "recency": hit.recency_score,
+                    "usage": hit.usage_score,
                 },
                 "excerpt": _preview(hit.chunk_text),
             }

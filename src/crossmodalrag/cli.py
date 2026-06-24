@@ -249,6 +249,7 @@ def ask_cmd(
                         "vector": hit.vector_score,
                         "lexical": hit.lexical_score,
                         "recency": hit.recency_score,
+                        "usage": hit.usage_score,
                     },
                 }
                 for i, hit in enumerate(hits, start=1)

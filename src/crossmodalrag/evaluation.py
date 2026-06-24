@@ -64,6 +64,7 @@ def run_eval(
     profile: str = DEFAULT_PROFILE,
     level: str = "evidence",
     restrict_source_types: set[str] | None = None,
+    now=None,
 ) -> EvalSummary:
     queries = list_eval_queries(conn, query_prefix=query_prefix)
     results: list[EvalQueryResult] = []
@@ -79,6 +80,7 @@ def run_eval(
                 top_k=top_k,
                 profile=profile,
                 restrict_source_types=restrict_source_types,
+                now=now,
             )
             retrieved_source_uris = _unique_source_uris_in_order([hit.source_uri for hit in hits])
         else:
