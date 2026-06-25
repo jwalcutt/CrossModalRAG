@@ -183,6 +183,13 @@ Requires [Ollama](https://ollama.com) running locally with a model pulled
   `--no-track` suppresses logging for a call. Only the target id + event type + time are stored —
   **never your query text** — and everything stays local. Inspect with `mem usage`; wipe with
   `mem usage --clear`.
+- **Forgetting risk** (`mem forgetting`): surfaces important-but-stale memories — "what am I likely
+  forgetting that's still relevant?" Each memory node is scored `risk = importance × staleness`, where
+  importance is its graph centrality (run `mem build-memory` first) and staleness grows with time since
+  you last touched it (a recent `retrieval`/`open` via tracking, or its content age) — so rehearsing a
+  memory lowers its risk. Every item is grounded to its L0 evidence and shows its
+  importance/staleness/confidence components. Use `--level all` to rank across events/episodes/concepts.
+  Read-only.
 - `--level` chooses the retrieval level: `evidence` (default, L0 chunks) or a memory level
   (`event`/`episode`/`concept`). At a memory level, `ask` retrieves the matching nodes, prints them,
   then drills them down to their L0 evidence and answers grounded in (and citing) that L0 — so
@@ -244,6 +251,7 @@ checks for measuring no regression.
 - `mem ingest-images [<path> ...]` (file or directory; falls back to `.env` `IMAGE_PATH_*`; requires the `[ocr]` extra + a tesseract binary)
 - `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent|usage] [--modality text|code|pdf|image ...] [--explain] [--no-llm] [--json] [--debug] [--track|--no-track] [--accept]`
 - `mem usage [--clear] [--top N]` (local usage-tracking stats; `--clear` wipes the history)
+- `mem forgetting [--level concept|episode|event|all] [--top N] [--min-support N]` ("what am I likely forgetting?" — important-but-stale memories, grounded to evidence)
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...] [--modality text|code|pdf|image ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)

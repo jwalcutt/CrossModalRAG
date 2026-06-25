@@ -581,6 +581,46 @@ def usage_cmd(clear: bool = False, top: int = 10) -> None:
                   f"events={s.count} last={s.last_event_at}")
 
 
+def forgetting_cmd(level: str = "concept", top: int = 10, min_support: int = 1) -> None:
+    from datetime import datetime, timezone
+
+    from crossmodalrag.config import get_usage_halflife_days
+    from crossmodalrag.memory.forgetting import LEVEL_NAMES, compute_forgetting_risk
+
+    db_path = get_db_path()
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        items = compute_forgetting_risk(
+            conn,
+            now=datetime.now(timezone.utc),
+            halflife_days=get_usage_halflife_days(),
+            levels=LEVEL_NAMES[level],
+            min_support=min_support,
+            top=top,
+        )
+    finally:
+        conn.close()
+
+    print(f"Forgetting risk (level={level}) — DB: {db_path}")
+    if not items:
+        print(
+            f"No {level} memory nodes with grounding found. Run `mem build-memory` first, "
+            "or try `--level all`."
+        )
+        return
+    print("What you're most likely forgetting (important but not recently revisited):")
+    for item in items:
+        title = item.title or "untitled"
+        print(
+            f"  [risk={item.risk:.3f}] L{item.level} {item.node_type}: {title}\n"
+            f"      importance={item.importance:.3f} staleness={item.staleness:.3f} "
+            f"confidence={item.confidence:.3f} (support={item.support}, last_touch={item.last_touch})"
+        )
+        if item.evidence_source_uris:
+            print(f"      evidence: {', '.join(item.evidence_source_uris)}")
+
+
 def concepts_cmd(top: int = 20) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
@@ -891,6 +931,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_usage.add_argument("--clear", action="store_true", help="Delete all usage events (local).")
     p_usage.add_argument("--top", type=int, default=10, help="How many top targets to show.")
 
+    p_forgetting = sub.add_parser(
+        "forgetting",
+        help="Rank important-but-stale memories ('what am I likely forgetting?'). Read-only.",
+    )
+    p_forgetting.add_argument(
+        "--level",
+        choices=["concept", "episode", "event", "all"],
+        default="concept",
+        help="Which memory level to score (default concept).",
+    )
+    p_forgetting.add_argument("--top", type=int, default=10)
+    p_forgetting.add_argument(
+        "--min-support",
+        type=int,
+        default=1,
+        help="Minimum grounded L0 chunks for a node to be considered.",
+    )
+
     p_seed = sub.add_parser(
         "seed-sample",
         help="Create deterministic synthetic notes/git fixtures and ingest them into the DB.",
@@ -1031,6 +1089,9 @@ def main() -> None:
         return
     if args.command == "usage":
         usage_cmd(clear=args.clear, top=args.top)
+        return
+    if args.command == "forgetting":
+        forgetting_cmd(level=args.level, top=args.top, min_support=args.min_support)
         return
     if args.command == "seed-sample":
         seed_sample_cmd(args.workspace_dir, force=args.force, db_path=args.db_path)
