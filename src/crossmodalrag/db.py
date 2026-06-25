@@ -121,6 +121,20 @@ CREATE TABLE IF NOT EXISTS usage_events (
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_target ON usage_events(target_kind, target_id);
 CREATE INDEX IF NOT EXISTS idx_usage_events_event_at ON usage_events(event_at);
+
+-- Phase 4: cached active-recall cards, one per memory node. A derived cache (never part of any
+-- content/derivation fingerprint); regenerated only when the node's content fingerprint changes
+-- (or on --regenerate). Cleaned up with its node in memory.store.delete_node.
+CREATE TABLE IF NOT EXISTS recall_cards (
+    node_id INTEGER PRIMARY KEY,
+    question TEXT NOT NULL,
+    answer TEXT,
+    fingerprint TEXT NOT NULL,
+    model TEXT,
+    prompt_version TEXT,
+    generated_by TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

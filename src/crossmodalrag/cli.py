@@ -621,6 +621,49 @@ def forgetting_cmd(level: str = "concept", top: int = 10, min_support: int = 1) 
             print(f"      evidence: {', '.join(item.evidence_source_uris)}")
 
 
+def recall_cmd(level: str = "concept", top: int = 10, min_support: int = 1, regenerate: bool = False) -> None:
+    from datetime import datetime, timezone
+
+    from crossmodalrag.config import get_usage_halflife_days
+    from crossmodalrag.memory.forgetting import LEVEL_NAMES
+    from crossmodalrag.memory.recall import generate_recall_cards
+
+    db_path = get_db_path()
+    provider = get_default_llm_provider(get_extract_model())
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        cards = generate_recall_cards(
+            conn,
+            provider,
+            now=datetime.now(timezone.utc),
+            halflife_days=get_usage_halflife_days(),
+            levels=LEVEL_NAMES[level],
+            top=top,
+            min_support=min_support,
+            regenerate=regenerate,
+        )
+    finally:
+        conn.close()
+
+    print(f"Active-recall cards (level={level}) — DB: {db_path}")
+    if not cards:
+        print(
+            f"No {level} memory nodes with grounding found. Run `mem build-memory` first, "
+            "or try `--level all`."
+        )
+        return
+    print("Quiz yourself on what you're most likely forgetting:")
+    for card in cards:
+        title = card.title or "untitled"
+        print(f"  [risk={card.risk:.3f} | {card.generated_by}] L{card.level} {card.node_type}: {title}")
+        print(f"      Q: {card.question}")
+        if card.answer:
+            print(f"      A: {card.answer}")
+        if card.evidence_source_uris:
+            print(f"      evidence: {', '.join(card.evidence_source_uris)}")
+
+
 def concepts_cmd(top: int = 20) -> None:
     db_path = get_db_path()
     conn = connect(db_path)
@@ -949,6 +992,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum grounded L0 chunks for a node to be considered.",
     )
 
+    p_recall = sub.add_parser(
+        "recall",
+        help="Generate grounded active-recall study cards for the memories you're most likely "
+        "forgetting (local LLM, cached; deterministic fallback when Ollama is absent).",
+    )
+    p_recall.add_argument(
+        "--level",
+        choices=["concept", "episode", "event", "all"],
+        default="concept",
+        help="Which memory level to generate cards for (default concept).",
+    )
+    p_recall.add_argument("--top", type=int, default=10)
+    p_recall.add_argument(
+        "--min-support",
+        type=int,
+        default=1,
+        help="Minimum grounded L0 chunks for a node to be considered.",
+    )
+    p_recall.add_argument(
+        "--regenerate",
+        action="store_true",
+        help="Force regeneration of cards (e.g. to upgrade fallback cards once Ollama is available).",
+    )
+
     p_seed = sub.add_parser(
         "seed-sample",
         help="Create deterministic synthetic notes/git fixtures and ingest them into the DB.",
@@ -1092,6 +1159,14 @@ def main() -> None:
         return
     if args.command == "forgetting":
         forgetting_cmd(level=args.level, top=args.top, min_support=args.min_support)
+        return
+    if args.command == "recall":
+        recall_cmd(
+            level=args.level,
+            top=args.top,
+            min_support=args.min_support,
+            regenerate=args.regenerate,
+        )
         return
     if args.command == "seed-sample":
         seed_sample_cmd(args.workspace_dir, force=args.force, db_path=args.db_path)
