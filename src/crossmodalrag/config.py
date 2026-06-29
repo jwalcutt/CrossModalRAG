@@ -98,6 +98,36 @@ def usage_tracking_enabled() -> bool:
     return os.getenv("CMRAG_USAGE_TRACKING", "off").strip().lower() in {"on", "1", "true", "yes"}
 
 
+def get_drift_window_days() -> float:
+    """Window length (days) for concept-drift snapshots. Default 30."""
+    raw = os.getenv("CMRAG_DRIFT_WINDOW_DAYS", "30").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 30.0
+    return value if value > 0 else 30.0
+
+
+def get_distill_epsilon() -> float:
+    """Max Recall@K a distilled representation may lose vs the full nodes. Default 0.05."""
+    raw = os.getenv("CMRAG_DISTILL_EPSILON", "0.05").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.05
+    return value if value >= 0 else 0.05
+
+
+def get_distill_compression_ratio() -> float:
+    """Target distilled-size / full-size for the Phase 5 distillation gate (0 < x <= 1). Default 0.5."""
+    raw = os.getenv("CMRAG_DISTILL_COMPRESSION_RATIO", "0.5").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.5
+    return value if 0 < value <= 1.0 else 0.5
+
+
 def get_min_evidence_score() -> float:
     raw = os.getenv("CMRAG_MIN_EVIDENCE_SCORE", "0.15").strip()
     try:

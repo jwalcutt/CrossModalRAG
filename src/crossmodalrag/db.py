@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
 CREATE INDEX IF NOT EXISTS idx_usage_events_target ON usage_events(target_kind, target_id);
 CREATE INDEX IF NOT EXISTS idx_usage_events_event_at ON usage_events(event_at);
 
--- Phase 4: cached active-recall cards, one per memory node. A derived cache (never part of any
+-- cached active-recall cards, one per memory node. A derived cache (never part of any
 -- content/derivation fingerprint); regenerated only when the node's content fingerprint changes
 -- (or on --regenerate). Cleaned up with its node in memory.store.delete_node.
 CREATE TABLE IF NOT EXISTS recall_cards (
@@ -135,6 +135,53 @@ CREATE TABLE IF NOT EXISTS recall_cards (
     generated_by TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- distilled (compact, retrieval-preserving) representation of an L2/L3 node, one row per node.
+-- per node. ADDITIVE and OPT-IN: it never mutates memory_nodes/L0 and is excluded from every
+-- content/derivation fingerprint, so dropping this table restores the Phase 1-4 baseline exactly.
+-- ``node_id`` is polymorphic into memory_nodes (no DB FK, mirroring memory_edges); integrity is
+-- enforced in app code + tests. ``core_evidence_json`` is a JSON list of REAL L0 evidence_chunks
+-- ids (a subset of resolve_to_evidence) so provenance survives compression — never a paraphrase
+-- that replaces the evidence. ``vector`` is the distilled summary embedding (float32 BLOB, model-
+-- tagged), parallel to node_embeddings. Derivation lands in a later Phase 5 step; this is scaffold.
+CREATE TABLE IF NOT EXISTS distilled_nodes (
+    node_id INTEGER PRIMARY KEY,
+    level INTEGER NOT NULL,
+    summary TEXT,
+    model TEXT,
+    prompt_version TEXT,
+    dim INTEGER,
+    vector BLOB,
+    core_evidence_json TEXT,
+    derivation_fingerprint TEXT,
+    confidence REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_distilled_nodes_fingerprint ON distilled_nodes(derivation_fingerprint);
+
+-- per-concept, per-time-window drift snapshot (one row per concept x window). ADDITIVE
+-- and SEPARABLE like distilled_nodes: excluded from all content/derivation fingerprints; dropping
+-- it restores the baseline. ``concept_id`` is polymorphic into memory_nodes (no DB FK). The
+-- ``prototype_vector`` is the centroid of the concept's member-event embeddings within
+-- [window_start, window_end); ``drift_metric`` is the movement vs the previous window; ``support``
+-- is the member count (explicit-uncertainty signal for thin windows). Computation lands in a later
+-- Phase 5 step; this is scaffold.
+CREATE TABLE IF NOT EXISTS drift_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept_id INTEGER NOT NULL,
+    window_start TEXT,
+    window_end TEXT,
+    prototype_dim INTEGER,
+    prototype_vector BLOB,
+    drift_metric REAL,
+    support INTEGER,
+    derivation_fingerprint TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_drift_snapshots_concept ON drift_snapshots(concept_id);
+CREATE INDEX IF NOT EXISTS idx_drift_snapshots_fingerprint ON drift_snapshots(derivation_fingerprint);
 """
 
 

@@ -219,6 +219,15 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
     screenshot_uri = str((vault_dir / "documents" / "notes-screenshot.png").resolve())
     diagram_uri = str((vault_dir / "documents" / "architecture-diagram.png").resolve())
 
+    # drift fixtures: two notes on the SAME topic (chunking) whose content shifts across
+    # time windows (fixed-size -> structure-aware) form a deliberately *drifting* concept, plus a
+    # stable control (the provenance principle). The query-positive [sample-drift] slice gives the
+    # distillation/drift scaffolding (and its gate) something to measure; the drift *metric* itself
+    # lands in a later step.
+    chunking_early_uri = str((vault_dir / "concepts" / "chunking-early.md").resolve())
+    chunking_late_uri = str((vault_dir / "concepts" / "chunking-late.md").resolve())
+    provenance_uri = str((vault_dir / "concepts" / "provenance.md").resolve())
+
     rows = [
         (
             "[sample] Where is the pipeline integrity smoke-test plan documented?",
@@ -294,6 +303,20 @@ def _seed_eval_queries(conn: sqlite3.Connection, *, vault_dir: Path, repo_dir: P
             "[sample-usage] Where is the pipeline integrity smoke-test plan and eval workflow "
             "documented?",
             json.dumps([note_project_uri]),
+        ),
+        (
+            # Drift slice (drifting concept): the answer spans BOTH chunking notes, which
+            # describe the same concept at two points in time (fixed-size -> structure-aware).
+            # Gold is multi-source so it exercises retrieval across the concept's drift.
+            "[sample-drift] How did the chunking strategy change from fixed-size windows to "
+            "structure-aware splitting?",
+            json.dumps([chunking_early_uri, chunking_late_uri]),
+        ),
+        (
+            # Drift slice (stable control): the provenance principle is the non-drifting concept,
+            # the baseline a drift metric should rank BELOW the chunking concept in step 2+.
+            "[sample-drift] What is the provenance-first principle for grounded answers?",
+            json.dumps([provenance_uri]),
         ),
     ]
     for query_text, expected_source_uris in rows:

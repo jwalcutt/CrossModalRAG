@@ -158,6 +158,10 @@ def delete_node(conn: sqlite3.Connection, node_id: int) -> None:
     )
     conn.execute("DELETE FROM node_embeddings WHERE node_id = ?", (node_id,))
     conn.execute("DELETE FROM recall_cards WHERE node_id = ?", (node_id,))
+    # derived caches keyed by this node (additive/separable; cleaned with the node so no
+    # orphan rows survive a re-derivation that drops the node).
+    conn.execute("DELETE FROM distilled_nodes WHERE node_id = ?", (node_id,))
+    conn.execute("DELETE FROM drift_snapshots WHERE concept_id = ?", (node_id,))
     conn.execute("DELETE FROM memory_nodes WHERE id = ?", (node_id,))
 
 

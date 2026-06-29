@@ -320,8 +320,8 @@ Use `mem seed-sample` to create a tiny deterministic sample vault + sample git r
 - Writes to a separate temp sample DB by default (does not modify your main `./data/memory.db`)
 - Seeds synthetic markdown notes and git commits (no personal data)
 - Populates namespaced sample rows in `queries_eval`: `[sample]` single-source specific-fact
-  queries (incl. one negative/abstain case), `[sample-synth]` multi-source synthesis queries, and
-  (Phase 3 scaffolding) `[sample-xmodal-text]` / `[sample-xmodal-visual]` cross-modal slices
+  queries (incl. one negative/abstain case), `[sample-synth]` multi-source synthesis queries, `[sample-xmodal-text]` / `[sample-xmodal-visual]` cross-modal slices, and a `[sample-drift]` slice — a deliberately drifting "chunking" concept
+  (two notes whose approach shifts across time windows) plus a stable provenance control
 - Materializes tiny synthetic cross-modal fixtures (a 1-page PDF + two PNGs) under the sample vault.
   The PDF is ingested when the `[pdf]` extra is present and the images when `[ocr]` (+ tesseract) is
   present; otherwise those slices stay at a ~0 baseline. The two slices are designed so an
@@ -370,6 +370,14 @@ export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval sc
 export CMRAG_EXTRACT_MODEL=llama3.2        # model for `mem build-memory` event extraction
 export CMRAG_EPISODE_GAP_HOURS=24          # L2 episode session gap (deterministic, no LLM)
 export CMRAG_CONCEPT_SIM_THRESHOLD=0.60    # L3 concept clustering cosine threshold (embeddings extra)
+```
+
+Distillation/drift scaffolding (additive, opt-in; defaults shown):
+
+```bash
+export CMRAG_DRIFT_WINDOW_DAYS=30          # concept-drift snapshot window length (days)
+export CMRAG_DISTILL_EPSILON=0.05          # max Recall@K a distilled rep may lose vs full nodes (gate)
+export CMRAG_DISTILL_COMPRESSION_RATIO=0.5 # target distilled-size / full-size for the distillation gate
 ```
 
 See `.env.example` for the full list of supported variables.

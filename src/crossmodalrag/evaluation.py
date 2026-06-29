@@ -56,6 +56,42 @@ def xmodal_gate_fires(
     return xmodal_gate_delta(text_summary, visual_summary) >= threshold
 
 
+# distillation gate (pre-committed).
+# A distilled (compact) representation of L2/L3 nodes is ADOPTED only when it preserves retrieval
+# quality within EPSILON of the full nodes AND meets the size target. Semantics are INVERTED vs the
+# xmodal gate: xmodal FIRES on a large gap (justifying a spike); distill FIRES (adopts) only when the
+# recall loss is small enough AND compression is achieved. The authoritative reading is deferred to
+# the later step that builds the distilled retrieval path — until then there is no distilled
+# summary to compare, so the gate HOLDs (mirrors the xmodal "no signal yet" precedent).
+DISTILL_GATE_EPSILON = 0.05            # max Recall@K the distilled path may lose vs full nodes
+DISTILL_GATE_COMPRESSION_RATIO = 0.5   # target distilled-size / full-size (<= is good)
+
+
+def distill_gate_delta(full_summary: EvalSummary, distilled_summary: EvalSummary) -> float:
+    """Recall@K LOST by distilling: full minus distilled (>= 0 means the distilled path is worse)."""
+    return full_summary.recall_at_k - distilled_summary.recall_at_k
+
+
+def distill_gate_fires(
+    full_summary: EvalSummary,
+    distilled_summary: EvalSummary,
+    *,
+    compression_ratio: float,
+    epsilon: float = DISTILL_GATE_EPSILON,
+    target_ratio: float = DISTILL_GATE_COMPRESSION_RATIO,
+) -> bool:
+    """True when adoption is justified: recall preserved within ``epsilon`` AND size target met.
+
+    ``compression_ratio`` is the achieved distilled-size / full-size (smaller is better). Both
+    conditions must hold — a distillation that keeps recall but doesn't shrink, or shrinks but loses
+    too much recall, does not fire.
+    """
+    return (
+        distill_gate_delta(full_summary, distilled_summary) <= epsilon
+        and compression_ratio <= target_ratio
+    )
+
+
 def run_eval(
     conn: sqlite3.Connection,
     *,
