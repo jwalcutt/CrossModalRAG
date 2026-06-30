@@ -271,18 +271,29 @@ checks for measuring no regression.
 - `mem ingest-pdf [<path> ...]` (file or directory; falls back to `.env` `PDF_PATH_*`; requires the `[pdf]` extra)
 - `mem ingest-images [<path> ...]` (file or directory; falls back to `.env` `IMAGE_PATH_*`; requires the `[ocr]` extra + a tesseract binary)
 - `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent|usage] [--modality text|code|pdf|image ...] [--explain] [--no-llm] [--json] [--debug] [--track|--no-track] [--accept]`
-- `mem usage [--clear] [--top N]` (local usage-tracking stats; `--clear` wipes the history)
-- `mem forgetting [--level concept|episode|event|all] [--top N] [--min-support N]` ("what am I likely forgetting?" — important-but-stale memories, grounded to evidence)
-- `mem recall [--level concept|episode|event|all] [--top N] [--min-support N] [--regenerate]` (grounded active-recall study cards for the highest forgetting-risk memories)
+- `mem usage [--clear] [--top N] [--json]` (local usage-tracking stats; `--clear` wipes the history)
+- `mem forgetting [--level concept|episode|event|all] [--top N] [--min-support N] [--json]` ("what am I likely forgetting?" — important-but-stale memories, grounded to evidence)
+- `mem recall [--level concept|episode|event|all] [--top N] [--min-support N] [--regenerate] [--json]` (grounded active-recall study cards for the highest forgetting-risk memories)
 - `mem drift [--top N] [--min-support N] [--json]` (concept drift over time windows; read-only — run `mem build-memory --level drift` first, needs the `[embeddings]` extra)
 - `mem distill [--top N] [--json]` (list distilled node stand-ins: core/full evidence + compression ratio; read-only — run `mem build-memory --level distill` first)
-- `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...] [--modality text|code|pdf|image ...]`
+- `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...] [--modality text|code|pdf|image ...] [--json]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
 - `mem build-memory [--level event|episode|concept|graph|drift|distill|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts + drift + distill need the `[embeddings]` extra; episode/graph need neither)
-- `mem memory-stats` (node/edge counts, integrity, plus distilled-node + drift-snapshot counts)
-- `mem concepts [--top N]` (L3 concepts by centrality)
-- `mem timeline [--limit N]` (L2 episodes, oldest first)
+- `mem memory-stats [--json]` (node/edge counts, integrity, plus distilled-node + drift-snapshot counts)
+- `mem concepts [--top N] [--json]` (L3 concepts by centrality)
+- `mem timeline [--limit N] [--json]` (L2 episodes, oldest first)
+
+### JSON output contracts
+
+The `--json` modes are **stable, machine-readable contracts** intended for tooling and (future) UI
+integration — `ask`, `eval`, `concepts`, `timeline`, `memory-stats`, `forgetting`, `recall`, `usage`,
+`drift`, and `distill` all support `--json`. Each contract is **additive-only**: field names and shapes
+are kept backward-compatible, and changes only *add* keys (never rename or remove). Every contract that
+returns memory items carries stable identifiers (`node_id`) and provenance (`evidence_source_uris` /
+evidence ids + L0 locators) so a consumer can drill back down to the source. The shapes are owned by the
+library (the `*_to_dict` / `list_*` / `memory_stats` helpers) and pinned by `tests/test_json_contracts.py`,
+so the CLI and any future API/UI render exactly the same payloads.
 
 ## Hierarchical Memory (experimental)
 

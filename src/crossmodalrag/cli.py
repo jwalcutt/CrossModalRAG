@@ -46,13 +46,6 @@ from crossmodalrag.memory.concepts import build_concepts
 from crossmodalrag.memory.episodes import build_episodes
 from crossmodalrag.memory.extract import extract_pending_sources
 from crossmodalrag.memory.graph import build_graph
-from crossmodalrag.memory.integrity import (
-    count_edges,
-    count_nodes_by_level,
-    count_nodes_by_type,
-    find_dangling_edges,
-    find_unsupported_nodes,
-)
 from crossmodalrag.retrieve.hybrid import DEFAULT_PROFILE, PROFILE_WEIGHTS, retrieve
 from crossmodalrag.retrieve.nodes import candidate_chunk_ids, retrieve_nodes
 from crossmodalrag.sample_data import default_sample_db_path, seed_sample_data
@@ -325,7 +318,10 @@ def eval_cmd(
     profile: str = DEFAULT_PROFILE,
     level: str = "evidence",
     modalities: list[str] | None = None,
+    as_json: bool = False,
 ) -> None:
+    from crossmodalrag.evaluation import eval_summary_to_dict
+
     db_path = get_db_path()
     restrict_source_types = resolve_source_types(modalities)
     conn = connect(db_path)
@@ -345,6 +341,12 @@ def eval_cmd(
         )
     finally:
         conn.close()
+
+    if as_json:
+        payload = eval_summary_to_dict(summary)
+        payload.update({"level": level, "profile": profile})
+        print(json.dumps(payload, indent=2))
+        return
 
     print(f"Evaluation DB: {db_path}")
     print(f"Retrieval level: {level} | profile: {profile}")
@@ -532,60 +534,53 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
     print("Run `mem memory-stats` to inspect node/edge counts and integrity.")
 
 
-def memory_stats_cmd() -> None:
+def memory_stats_cmd(as_json: bool = False) -> None:
+    from crossmodalrag.memory.integrity import memory_stats
+
     db_path = get_db_path()
     conn = connect(db_path)
     try:
         init_db(conn)
-        by_level = count_nodes_by_level(conn)
-        by_type = count_nodes_by_type(conn)
-        edges = count_edges(conn)
-        unsupported = find_unsupported_nodes(conn)
-        dangling = find_dangling_edges(conn)
-        node_vectors = count_node_embeddings(conn)
-        relates_edges = conn.execute(
-            "SELECT COUNT(*) AS n FROM memory_edges WHERE relation = 'relates_to'"
-        ).fetchone()["n"]
-        distilled_count = conn.execute("SELECT COUNT(*) AS n FROM distilled_nodes").fetchone()["n"]
-        drift_count = conn.execute("SELECT COUNT(*) AS n FROM drift_snapshots").fetchone()["n"]
-        top_central = conn.execute(
-            "SELECT id, level, title, centrality FROM memory_nodes "
-            "WHERE centrality IS NOT NULL ORDER BY centrality DESC, id ASC LIMIT 3"
-        ).fetchall()
+        stats = memory_stats(conn)
     finally:
         conn.close()
 
-    total_nodes = sum(by_level.values())
+    if as_json:
+        print(json.dumps(stats, indent=2))
+        return
+
+    by_level = stats["nodes_by_level"]
     print(f"Memory DB: {db_path}")
-    print(f"Memory nodes (L1-L3): {total_nodes}")
+    print(f"Memory nodes (L1-L3): {stats['total_nodes']}")
     for level in (1, 2, 3):
-        print(f"  L{level}: {by_level.get(level, 0)}")
-    if by_type:
-        print("By type: " + ", ".join(f"{name}={count}" for name, count in by_type.items()))
-    print(f"Memory edges: {edges}")
-    print(f"Concept co-occurrence edges (relates_to): {relates_edges}")
-    print(f"Node embeddings: {node_vectors}")
-    print(f"Distilled nodes: {distilled_count}")
-    print(f"Drift snapshots: {drift_count}")
-    if top_central:
+        print(f"  L{level}: {by_level.get(str(level), 0)}")
+    if stats["nodes_by_type"]:
+        print("By type: " + ", ".join(f"{name}={count}" for name, count in stats["nodes_by_type"].items()))
+    print(f"Memory edges: {stats['edges']}")
+    print(f"Concept co-occurrence edges (relates_to): {stats['relates_edges']}")
+    print(f"Node embeddings: {stats['node_embeddings']}")
+    print(f"Distilled nodes: {stats['distilled_nodes']}")
+    print(f"Drift snapshots: {stats['drift_snapshots']}")
+    if stats["top_central"]:
         print("Top central nodes:")
-        for row in top_central:
-            title = row["title"] or "untitled"
-            print(f"  L{row['level']} #{row['id']} ({row['centrality']:.3f}): {title}")
+        for row in stats["top_central"]:
+            print(f"  L{row['level']} #{row['node_id']} ({row['centrality']:.3f}): {row['title'] or 'untitled'}")
+    integ = stats["integrity"]
     print("Integrity:")
-    print(f"  unsupported nodes (no L0 evidence): {len(unsupported)}")
-    print(f"  dangling edges (missing endpoint): {len(dangling)}")
-    if unsupported:
-        print(f"  unsupported node ids: {unsupported}")
-    if dangling:
-        print(f"  dangling edge ids: {dangling}")
+    print(f"  unsupported nodes (no L0 evidence): {integ['unsupported_count']}")
+    print(f"  dangling edges (missing endpoint): {integ['dangling_count']}")
+    if integ["unsupported_ids"]:
+        print(f"  unsupported node ids: {integ['unsupported_ids']}")
+    if integ["dangling_ids"]:
+        print(f"  dangling edge ids: {integ['dangling_ids']}")
 
 
-def usage_cmd(clear: bool = False, top: int = 10) -> None:
+def usage_cmd(clear: bool = False, top: int = 10, as_json: bool = False) -> None:
     from datetime import datetime, timezone
 
     from crossmodalrag.config import get_usage_halflife_days, usage_tracking_enabled
     from crossmodalrag.usage.store import clear_usage_events, usage_summaries
+    from crossmodalrag.usage.strength import usage_summary_to_dict
 
     db_path = get_db_path()
     conn = connect(db_path)
@@ -593,7 +588,10 @@ def usage_cmd(clear: bool = False, top: int = 10) -> None:
         init_db(conn)
         if clear:
             deleted = clear_usage_events(conn)
-            print(f"Cleared {deleted} usage event(s) from {db_path}.")
+            if as_json:
+                print(json.dumps({"cleared": deleted}, indent=2))
+            else:
+                print(f"Cleared {deleted} usage event(s) from {db_path}.")
             return
 
         total = conn.execute("SELECT COUNT(*) AS n FROM usage_events").fetchone()["n"]
@@ -606,12 +604,24 @@ def usage_cmd(clear: bool = False, top: int = 10) -> None:
     finally:
         conn.close()
 
+    top_targets = sorted(summaries.values(), key=lambda s: s.strength, reverse=True)[:top]
+    if as_json:
+        print(json.dumps(
+            {
+                "tracking_enabled": usage_tracking_enabled(),
+                "total_events": int(total),
+                "by_type": {r["event_type"]: int(r["n"]) for r in by_type},
+                "top_targets": [usage_summary_to_dict(s) for s in top_targets],
+            },
+            indent=2,
+        ))
+        return
+
     print(f"Usage DB: {db_path}")
     print(f"Tracking enabled (env): {usage_tracking_enabled()}")
     print(f"Total usage events: {total}")
     if by_type:
         print("By type: " + ", ".join(f"{r['event_type']}={r['n']}" for r in by_type))
-    top_targets = sorted(summaries.values(), key=lambda s: s.strength, reverse=True)[:top]
     if top_targets:
         print(f"Top {len(top_targets)} targets by rehearsal strength:")
         for s in top_targets:
@@ -619,11 +629,15 @@ def usage_cmd(clear: bool = False, top: int = 10) -> None:
                   f"events={s.count} last={s.last_event_at}")
 
 
-def forgetting_cmd(level: str = "concept", top: int = 10, min_support: int = 1) -> None:
+def forgetting_cmd(level: str = "concept", top: int = 10, min_support: int = 1, as_json: bool = False) -> None:
     from datetime import datetime, timezone
 
     from crossmodalrag.config import get_usage_halflife_days
-    from crossmodalrag.memory.forgetting import LEVEL_NAMES, compute_forgetting_risk
+    from crossmodalrag.memory.forgetting import (
+        LEVEL_NAMES,
+        compute_forgetting_risk,
+        forgetting_risk_to_dict,
+    )
 
     db_path = get_db_path()
     conn = connect(db_path)
@@ -639,6 +653,10 @@ def forgetting_cmd(level: str = "concept", top: int = 10, min_support: int = 1) 
         )
     finally:
         conn.close()
+
+    if as_json:
+        print(json.dumps({"level": level, "forgetting": [forgetting_risk_to_dict(i) for i in items]}, indent=2))
+        return
 
     print(f"Forgetting risk (level={level}) — DB: {db_path}")
     if not items:
@@ -740,12 +758,18 @@ def distill_cmd(top: int = 10, as_json: bool = False) -> None:
             print(f"      evidence: {item.evidence_source_uri}")
 
 
-def recall_cmd(level: str = "concept", top: int = 10, min_support: int = 1, regenerate: bool = False) -> None:
+def recall_cmd(
+    level: str = "concept",
+    top: int = 10,
+    min_support: int = 1,
+    regenerate: bool = False,
+    as_json: bool = False,
+) -> None:
     from datetime import datetime, timezone
 
     from crossmodalrag.config import get_usage_halflife_days
     from crossmodalrag.memory.forgetting import LEVEL_NAMES
-    from crossmodalrag.memory.recall import generate_recall_cards
+    from crossmodalrag.memory.recall import generate_recall_cards, recall_card_to_dict
 
     db_path = get_db_path()
     provider = get_default_llm_provider(get_extract_model())
@@ -765,6 +789,10 @@ def recall_cmd(level: str = "concept", top: int = 10, min_support: int = 1, rege
     finally:
         conn.close()
 
+    if as_json:
+        print(json.dumps({"level": level, "recall": [recall_card_to_dict(c) for c in cards]}, indent=2))
+        return
+
     print(f"Active-recall cards (level={level}) — DB: {db_path}")
     if not cards:
         print(
@@ -783,66 +811,54 @@ def recall_cmd(level: str = "concept", top: int = 10, min_support: int = 1, rege
             print(f"      evidence: {', '.join(card.evidence_source_uris)}")
 
 
-def concepts_cmd(top: int = 20) -> None:
+def concepts_cmd(top: int = 20, as_json: bool = False) -> None:
+    from crossmodalrag.memory.concepts import list_concept_views
+
     db_path = get_db_path()
     conn = connect(db_path)
     try:
         init_db(conn)
-        rows = conn.execute(
-            """
-            SELECT n.id AS id, n.title AS title, n.centrality AS centrality,
-                   COUNT(e.id) AS members
-            FROM memory_nodes n
-            LEFT JOIN memory_edges e
-                ON e.parent_level = 3 AND e.parent_id = n.id AND e.relation = 'contains'
-            WHERE n.level = 3 AND n.node_type = 'concept'
-            GROUP BY n.id
-            ORDER BY n.centrality DESC NULLS LAST, n.id ASC
-            LIMIT ?
-            """,
-            (top,),
-        ).fetchall()
+        items = list_concept_views(conn, top=top)
     finally:
         conn.close()
-    if not rows:
+
+    if as_json:
+        print(json.dumps({"concepts": items}, indent=2))
+        return
+    if not items:
         print("No concepts yet. Run `mem build-memory` (needs the embeddings extra).")
         return
-    print(f"Concepts (top {len(rows)} by centrality):")
-    for row in rows:
-        cen = row["centrality"] if row["centrality"] is not None else 0.0
-        print(f"  #{row['id']} (centrality={cen:.3f}, {row['members']} events): {row['title'] or 'untitled'}")
+    print(f"Concepts (top {len(items)} by centrality):")
+    for item in items:
+        print(
+            f"  #{item['node_id']} (centrality={item['centrality']:.3f}, {item['members']} events): "
+            f"{item['title'] or 'untitled'}"
+        )
 
 
-def timeline_cmd(limit: int = 50) -> None:
+def timeline_cmd(limit: int = 50, as_json: bool = False) -> None:
+    from crossmodalrag.memory.episodes import list_episode_timeline
+
     db_path = get_db_path()
     conn = connect(db_path)
     try:
         init_db(conn)
-        rows = conn.execute(
-            """
-            SELECT n.id AS id, n.title AS title, n.time_start AS time_start, n.time_end AS time_end,
-                   COUNT(e.id) AS members
-            FROM memory_nodes n
-            LEFT JOIN memory_edges e
-                ON e.parent_level = 2 AND e.parent_id = n.id AND e.relation = 'contains'
-            WHERE n.level = 2 AND n.node_type = 'episode'
-            GROUP BY n.id
-            ORDER BY n.time_start ASC NULLS LAST, n.id ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        items = list_episode_timeline(conn, limit=limit)
     finally:
         conn.close()
-    if not rows:
+
+    if as_json:
+        print(json.dumps({"timeline": items}, indent=2))
+        return
+    if not items:
         print("No episodes yet. Run `mem build-memory`.")
         return
-    print(f"Timeline ({len(rows)} episodes, oldest first):")
-    for row in rows:
-        start = (row["time_start"] or "?")[:10]
-        end = (row["time_end"] or "?")[:10]
+    print(f"Timeline ({len(items)} episodes, oldest first):")
+    for item in items:
+        start = (item["time_start"] or "?")[:10]
+        end = (item["time_end"] or "?")[:10]
         span = start if start == end else f"{start}..{end}"
-        print(f"  #{row['id']} [{span}] ({row['members']} events): {row['title'] or 'untitled'}")
+        print(f"  #{item['node_id']} [{span}] ({item['members']} events): {item['title'] or 'untitled'}")
 
 
 def seed_sample_cmd(
@@ -1006,6 +1022,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Restrict evidence to one or more modalities (repeatable): text/code/pdf/image.",
     )
+    p_eval.add_argument("--json", dest="as_json", action="store_true", help="Emit metrics as JSON.")
 
     p_reindex = sub.add_parser(
         "reindex-embeddings",
@@ -1077,16 +1094,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Extraction model id (defaults to CMRAG_EXTRACT_MODEL).",
     )
 
-    sub.add_parser(
+    p_stats = sub.add_parser(
         "memory-stats",
         help="Show hierarchical memory node/edge counts and structural integrity status.",
     )
+    p_stats.add_argument("--json", dest="as_json", action="store_true", help="Emit stats as JSON.")
 
     p_concepts = sub.add_parser("concepts", help="List L3 concepts ranked by centrality.")
     p_concepts.add_argument("--top", type=int, default=20)
+    p_concepts.add_argument("--json", dest="as_json", action="store_true", help="Emit concepts as JSON.")
 
     p_timeline = sub.add_parser("timeline", help="List L2 episodes chronologically.")
     p_timeline.add_argument("--limit", type=int, default=50)
+    p_timeline.add_argument("--json", dest="as_json", action="store_true", help="Emit the timeline as JSON.")
 
     p_usage = sub.add_parser(
         "usage",
@@ -1094,6 +1114,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_usage.add_argument("--clear", action="store_true", help="Delete all usage events (local).")
     p_usage.add_argument("--top", type=int, default=10, help="How many top targets to show.")
+    p_usage.add_argument("--json", dest="as_json", action="store_true", help="Emit usage stats as JSON.")
 
     p_forgetting = sub.add_parser(
         "forgetting",
@@ -1112,6 +1133,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Minimum grounded L0 chunks for a node to be considered.",
     )
+    p_forgetting.add_argument("--json", dest="as_json", action="store_true", help="Emit risks as JSON.")
 
     p_drift = sub.add_parser(
         "drift",
@@ -1166,6 +1188,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force regeneration of cards (e.g. to upgrade fallback cards once Ollama is available).",
     )
+    p_recall.add_argument("--json", dest="as_json", action="store_true", help="Emit cards as JSON.")
 
     p_seed = sub.add_parser(
         "seed-sample",
@@ -1279,6 +1302,7 @@ def main() -> None:
             profile=args.profile,
             level=args.level,
             modalities=args.modality,
+            as_json=args.as_json,
         )
         return
     if args.command == "reindex-embeddings":
@@ -1297,19 +1321,19 @@ def main() -> None:
         build_memory_cmd(level=args.level, limit=args.limit, model=args.model)
         return
     if args.command == "memory-stats":
-        memory_stats_cmd()
+        memory_stats_cmd(as_json=args.as_json)
         return
     if args.command == "concepts":
-        concepts_cmd(top=args.top)
+        concepts_cmd(top=args.top, as_json=args.as_json)
         return
     if args.command == "timeline":
-        timeline_cmd(limit=args.limit)
+        timeline_cmd(limit=args.limit, as_json=args.as_json)
         return
     if args.command == "usage":
-        usage_cmd(clear=args.clear, top=args.top)
+        usage_cmd(clear=args.clear, top=args.top, as_json=args.as_json)
         return
     if args.command == "forgetting":
-        forgetting_cmd(level=args.level, top=args.top, min_support=args.min_support)
+        forgetting_cmd(level=args.level, top=args.top, min_support=args.min_support, as_json=args.as_json)
         return
     if args.command == "drift":
         drift_cmd(top=args.top, min_support=args.min_support, as_json=args.json)
@@ -1323,6 +1347,7 @@ def main() -> None:
             top=args.top,
             min_support=args.min_support,
             regenerate=args.regenerate,
+            as_json=args.as_json,
         )
         return
     if args.command == "seed-sample":

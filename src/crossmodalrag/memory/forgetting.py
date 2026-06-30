@@ -52,6 +52,23 @@ class ForgettingRisk:
     evidence_source_uris: list[str]
 
 
+def forgetting_risk_to_dict(item: ForgettingRisk) -> dict:
+    """Stable JSON contract for `mem forgetting --json`. Keep field names backward-compatible."""
+    return {
+        "node_id": item.node_id,
+        "level": item.level,
+        "node_type": item.node_type,
+        "title": item.title,
+        "risk": item.risk,
+        "importance": item.importance,
+        "staleness": item.staleness,
+        "confidence": item.confidence,
+        "support": item.support,
+        "last_touch": item.last_touch,
+        "evidence_source_uris": list(item.evidence_source_uris),
+    }
+
+
 def compute_forgetting_risk(
     conn: sqlite3.Connection,
     *,

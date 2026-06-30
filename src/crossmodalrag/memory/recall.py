@@ -48,6 +48,22 @@ class RecallCard:
     generated_by: str  # "llm" | "fallback"
 
 
+def recall_card_to_dict(card: RecallCard) -> dict:
+    """Stable JSON contract for `mem recall --json`. Keep field names backward-compatible."""
+    return {
+        "node_id": card.node_id,
+        "level": card.level,
+        "node_type": card.node_type,
+        "title": card.title,
+        "question": card.question,
+        "answer": card.answer,
+        "risk": card.risk,
+        "confidence": card.confidence,
+        "generated_by": card.generated_by,
+        "evidence_source_uris": list(card.evidence_source_uris),
+    }
+
+
 def generate_recall_cards(
     conn: sqlite3.Connection,
     provider: LLMProvider | None,

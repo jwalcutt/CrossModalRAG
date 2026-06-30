@@ -127,6 +127,33 @@ def build_concepts(
     )
 
 
+def list_concept_views(conn: sqlite3.Connection, *, top: int = 20) -> list[dict]:
+    """Read-only L3-concept browse view (by centrality). Stable JSON contract for `mem concepts`."""
+    rows = conn.execute(
+        """
+        SELECT n.id AS id, n.title AS title, n.centrality AS centrality,
+               COUNT(e.id) AS members
+        FROM memory_nodes n
+        LEFT JOIN memory_edges e
+            ON e.parent_level = 3 AND e.parent_id = n.id AND e.relation = 'contains'
+        WHERE n.level = 3 AND n.node_type = 'concept'
+        GROUP BY n.id
+        ORDER BY n.centrality DESC NULLS LAST, n.id ASC
+        LIMIT ?
+        """,
+        (top,),
+    ).fetchall()
+    return [
+        {
+            "node_id": int(r["id"]),
+            "title": r["title"],
+            "centrality": float(r["centrality"]) if r["centrality"] is not None else 0.0,
+            "members": int(r["members"]),
+        }
+        for r in rows
+    ]
+
+
 def _cluster(node_vectors: list[tuple[int, list[float]]], threshold: float) -> list[list[int]]:
     """Greedy 'leader' threshold clustering. Deterministic by ascending node id."""
     if not node_vectors:

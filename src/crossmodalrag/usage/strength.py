@@ -48,6 +48,17 @@ class UsageSummary:
     strength: float
 
 
+def usage_summary_to_dict(summary: UsageSummary) -> dict:
+    """Stable JSON contract for a usage target in `mem usage --json`. Keep field names stable."""
+    return {
+        "target_kind": summary.target_kind,
+        "target_id": summary.target_id,
+        "count": summary.count,
+        "last_event_at": summary.last_event_at,
+        "strength": summary.strength,
+    }
+
+
 def default_weight(event_type: str) -> float:
     return EVENT_WEIGHTS.get(event_type, 1.0)
 

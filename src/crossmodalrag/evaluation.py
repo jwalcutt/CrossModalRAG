@@ -35,6 +35,18 @@ class EvalSummary:
     results: list[EvalQueryResult]
 
 
+def eval_summary_to_dict(summary: "EvalSummary") -> dict:
+    """Stable JSON contract for `mem eval --json`. Keep field names backward-compatible."""
+    return {
+        "query_count": summary.query_count,
+        "top_k": summary.top_k,
+        "recall_at_k": summary.recall_at_k,
+        "mrr_at_k": summary.mrr_at_k,
+        "citation_hit_rate": summary.citation_hit_rate,
+        "misses": [r.query_text for r in summary.results if r.first_correct_rank is None],
+    }
+
+
 # Phase 3 native-embedding gate (pre-committed, see project-scope.md §1a /
 # dev-steps.md Phase 3). Native (CLIP-class) image embeddings become justified
 # when, after the step-3 OCR-text-first baseline, the visually-dominant slice

@@ -96,6 +96,34 @@ def build_episodes(conn: sqlite3.Connection, *, gap_seconds: int | None = None) 
     )
 
 
+def list_episode_timeline(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict]:
+    """Read-only L2-episode timeline (oldest first). Stable JSON contract for `mem timeline`."""
+    rows = conn.execute(
+        """
+        SELECT n.id AS id, n.title AS title, n.time_start AS time_start, n.time_end AS time_end,
+               COUNT(e.id) AS members
+        FROM memory_nodes n
+        LEFT JOIN memory_edges e
+            ON e.parent_level = 2 AND e.parent_id = n.id AND e.relation = 'contains'
+        WHERE n.level = 2 AND n.node_type = 'episode'
+        GROUP BY n.id
+        ORDER BY n.time_start ASC NULLS LAST, n.id ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        {
+            "node_id": int(r["id"]),
+            "title": r["title"],
+            "time_start": r["time_start"],
+            "time_end": r["time_end"],
+            "members": int(r["members"]),
+        }
+        for r in rows
+    ]
+
+
 def _group_events(events: list[MemoryNode], gap_seconds: int) -> list[tuple[str, list[MemoryNode]]]:
     """Bucket events by project key, then sessionize each bucket by time gap."""
     buckets: dict[str, list[MemoryNode]] = {}
