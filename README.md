@@ -270,7 +270,7 @@ checks for measuring no regression.
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...] [--modality text|code|pdf|image ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
-- `mem build-memory [--level event|episode|concept|graph|drift|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts + drift need the `[embeddings]` extra; episode/graph need neither)
+- `mem build-memory [--level event|episode|concept|graph|drift|distill|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts + drift + distill need the `[embeddings]` extra; episode/graph need neither)
 - `mem memory-stats`
 - `mem concepts [--top N]` (L3 concepts by centrality)
 - `mem timeline [--limit N]` (L2 episodes, oldest first)
@@ -301,6 +301,13 @@ grouping**, and **L3 concept clustering**. `mem build-memory` derives all three:
 - **Drift** (no LLM; needs the `[embeddings]` extra): buckets each concept's member events into
   time windows and scores how the concept's prototype (centroid) **moved** between windows; surfaced
   via `mem drift`. See the `mem drift` bullet above.
+- **Distill** (needs the `[embeddings]` extra; LLM summary optional): derives a compact,
+  retrieval-preserving stand-in for each L2/L3 node — a short summary (+ its embedding) and a
+  **minimal subset of the node's real L0 evidence chunks** (the most representative ones, sized to
+  `CMRAG_DISTILL_COMPRESSION_RATIO`). This is a research/measurement feature: it does **not** change
+  `mem ask` ranking. Whether a distilled stand-in is good enough to adopt is decided by
+  `scripts/distill_gate.py` (below), not by default. Provenance is preserved — the kept chunks are a
+  real subset, never a generated paraphrase.
 
 Every higher-level node drills down to its L0 evidence through its members.
 
@@ -311,8 +318,25 @@ mem build-memory --level episode     # only L2 episodes (no Ollama needed)
 mem build-memory --level concept     # only L3 concepts (needs the embeddings extra; run reindex-embeddings first)
 mem build-memory --level graph       # only centrality + concept co-occurrence (no LLM/embeddings)
 mem build-memory --level drift       # only concept-drift snapshots (needs the embeddings extra; build concepts first)
+mem build-memory --level distill     # only distilled node stand-ins (needs the embeddings extra; build concepts first)
 mem memory-stats                     # node/edge counts, co-occurrence edges, top central nodes, integrity
 ```
+
+**Distillation gate (research/measurement).** `scripts/distill_gate.py` measures whether the
+distilled stand-ins preserve retrieval quality against the full nodes, under a pre-committed budget
+(`CMRAG_DISTILL_EPSILON`, default 0.05 max Recall@K loss; `CMRAG_DISTILL_COMPRESSION_RATIO`, default
+0.5 target footprint). It prints `GATE: FIRE` only when recall is preserved within ε **and** the size
+target is met. Run it on an embedded corpus after building concepts + distilling:
+
+```bash
+mem build-memory --db-path <db>                       # events/episodes/concepts (Ollama)
+CMRAG_DB_PATH=<db> mem reindex-embeddings             # needs the [embeddings] extra
+CMRAG_DB_PATH=<db> mem build-memory --level distill   # derive the distilled stand-ins
+python scripts/distill_gate.py --db-path <db>         # full vs distilled Recall@K, ratio, FIRE/HOLD
+```
+
+Adopting distillation in the live retrieval path is a separate, explicitly-gated decision — the gate
+must fire on a representative corpus first.
 
 **Date-aware note dates.** A note's timestamp drives time-aware layers (episodes, drift). If a note
 declares an explicit date — YAML frontmatter `date:`/`created:`, or a leading `Date: YYYY-MM-DD` line

@@ -162,6 +162,78 @@ def run_eval(
     )
 
 
+def run_distilled_eval(
+    conn: sqlite3.Connection,
+    *,
+    top_k: int = 5,
+    query_prefix: str | None = None,
+    profile: str = DEFAULT_PROFILE,
+    level: str = "concept",
+    now=None,  # noqa: ARG001 - accepted for run_eval symmetry; distilled recency uses wall clock
+) -> EvalSummary:
+    """Retrieval eval through the *distilled* stand-ins: rank distilled nodes, drill to their
+    core-evidence subset, score against the gold sources. Same metric as ``run_eval`` so the two are
+    directly comparable for the distillation gate."""
+    from crossmodalrag.retrieve.distilled import distilled_drilldown_source_uris, retrieve_distilled
+
+    queries = list_eval_queries(conn, query_prefix=query_prefix)
+    results: list[EvalQueryResult] = []
+    for query in queries:
+        if not query.expected_source_uris:
+            continue
+        hits = retrieve_distilled(conn, query.query_text, level=level, top_k=top_k, profile=profile)
+        retrieved_source_uris = distilled_drilldown_source_uris(conn, hits)
+        first_correct_rank = _first_correct_rank(retrieved_source_uris, set(query.expected_source_uris))
+        results.append(
+            EvalQueryResult(
+                query_text=query.query_text,
+                expected_source_uris=query.expected_source_uris,
+                retrieved_source_uris=retrieved_source_uris,
+                first_correct_rank=first_correct_rank,
+                recall_hit=first_correct_rank is not None and first_correct_rank <= top_k,
+                citation_hit=first_correct_rank == 1,
+            )
+        )
+
+    if not results:
+        return EvalSummary(
+            query_count=0, top_k=top_k, recall_at_k=0.0, mrr_at_k=0.0, citation_hit_rate=0.0, results=[]
+        )
+    query_count = len(results)
+    recall = sum(1 for r in results if r.recall_hit) / query_count
+    mrr = sum((1.0 / r.first_correct_rank) if r.first_correct_rank else 0.0 for r in results) / query_count
+    citation_hit_rate = sum(1 for r in results if r.citation_hit) / query_count
+    return EvalSummary(
+        query_count=query_count,
+        top_k=top_k,
+        recall_at_k=recall,
+        mrr_at_k=mrr,
+        citation_hit_rate=citation_hit_rate,
+        results=results,
+    )
+
+
+def distilled_compression_ratio(conn: sqlite3.Connection, *, level: str = "concept") -> float:
+    """Evidence-footprint shrinkage of the distilled level: Σ|core_evidence| ÷ Σ|full evidence|.
+
+    This is the "size" the distilled node stands in for (≤ target means real compression). Returns
+    1.0 (no compression) when nothing has been distilled at the level."""
+    from crossmodalrag.memory.store import resolve_to_evidence
+    from crossmodalrag.retrieve.distilled import LEVEL_TO_NODE
+
+    node_level, _ = LEVEL_TO_NODE[level]
+    rows = conn.execute(
+        "SELECT node_id, core_evidence_json FROM distilled_nodes WHERE level = ?", (node_level,)
+    ).fetchall()
+    if not rows:
+        return 1.0
+    core_total = full_total = 0
+    for row in rows:
+        core_total += len(json.loads(row["core_evidence_json"] or "[]"))
+        full_total += len(resolve_to_evidence(conn, node_level, int(row["node_id"])))
+    return (core_total / full_total) if full_total else 1.0
+
+
 def list_eval_queries(
     conn: sqlite3.Connection,
     *,

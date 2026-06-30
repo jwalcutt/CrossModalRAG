@@ -44,7 +44,13 @@ from crossmodalrag.config import (  # noqa: E402
     load_dotenv,
 )
 from crossmodalrag.db import connect, init_db  # noqa: E402
-from crossmodalrag.evaluation import distill_gate_delta, distill_gate_fires, run_eval  # noqa: E402
+from crossmodalrag.evaluation import (  # noqa: E402
+    distill_gate_delta,
+    distill_gate_fires,
+    distilled_compression_ratio,
+    run_distilled_eval,
+    run_eval,
+)
 
 DRIFT_PREFIX = "[sample-drift]"
 
@@ -85,10 +91,22 @@ def build_parser() -> argparse.ArgumentParser:
 def _distilled_eval(conn, *, top_k, query_prefix, profile, level):
     """Run the distilled retrieval path. Returns (EvalSummary, compression_ratio) or None.
 
-    Not built yet: returns None so the gate HOLDs with a
-    clear banner. A later step wires the distilled-node retrieval path here.
+    Returns None (→ HOLD banner) when nothing has been distilled at this level yet (run
+    `mem build-memory --level distill` first). Distilled retrieval only applies to L2/L3
+    stand-ins, so an evidence-level request also returns None.
     """
-    return None
+    if level not in ("episode", "concept"):
+        return None
+    has_distilled = conn.execute(
+        "SELECT 1 FROM distilled_nodes LIMIT 1"
+    ).fetchone()
+    if has_distilled is None:
+        return None
+    summary = run_distilled_eval(
+        conn, top_k=top_k, query_prefix=query_prefix, profile=profile, level=level
+    )
+    ratio = distilled_compression_ratio(conn, level=level)
+    return summary, ratio
 
 
 def main() -> None:

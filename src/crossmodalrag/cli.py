@@ -443,6 +443,7 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
     build_concept = level in ("concept", "all")
     build_graph_layer = level in ("graph", "all")
     build_drift_layer = level in ("drift", "all")
+    build_distill_layer = level in ("distill", "all")
     db_path = get_db_path()
     conn = connect(db_path)
     try:
@@ -509,6 +510,23 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
             print(f"  Snapshots created: {drift.snapshots_created}")
             print(f"  Snapshots kept (up to date): {drift.snapshots_kept}")
             print(f"  Snapshots deleted (stale): {drift.snapshots_deleted}")
+
+        if build_distill_layer:
+            embed_provider = get_default_provider()
+            if embed_provider is None:
+                raise SystemExit(
+                    "Distillation requires the embeddings extra. Run: pip install -e \".[embeddings]\""
+                )
+            from crossmodalrag.memory.distill import build_distilled
+
+            llm_provider = get_default_llm_provider(model or get_extract_model())
+            distilled = build_distilled(conn, embed_provider, llm_provider)
+            print(f"Distillation | embed: {embed_provider.name}")
+            print(f"  Nodes distilled: {distilled.nodes_distilled}")
+            print(f"  Nodes kept (up to date): {distilled.nodes_kept}")
+            print(f"  Nodes deleted (stale): {distilled.nodes_deleted}")
+            if distilled.nodes_distilled:
+                print(f"  Summaries by LLM: {distilled.named_by_llm} | by fallback: {distilled.named_by_fallback}")
     finally:
         conn.close()
     print("Run `mem memory-stats` to inspect node/edge counts and integrity.")
@@ -984,11 +1002,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_build.add_argument(
         "--level",
-        choices=["event", "episode", "concept", "graph", "drift", "all"],
+        choices=["event", "episode", "concept", "graph", "drift", "distill", "all"],
         default="all",
         help="Memory level to build: 'event' (LLM), 'episode' (no LLM), "
         "'concept' (embeddings extra; LLM naming optional), 'graph' (no LLM/embeddings), "
-        "'drift' (concept drift over time windows; embeddings extra, no LLM), or 'all' (default).",
+        "'drift' (concept drift over time windows; embeddings extra, no LLM), "
+        "'distill' (compact retrieval-preserving node stand-ins; embeddings extra, LLM summary "
+        "optional), or 'all' (default).",
     )
     p_build.add_argument(
         "--limit",
