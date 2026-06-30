@@ -7,16 +7,11 @@ import sys
 from pathlib import Path
 
 from crossmodalrag.config import (
-    get_config_path,
     get_connector_paths,
     get_db_path,
     get_default_profile,
     get_default_top_k,
     get_extract_model,
-    get_llm_base_url,
-    get_llm_model,
-    get_llm_timeout,
-    load_config,
     load_dotenv,
     usage_tracking_enabled,
 )
@@ -39,6 +34,7 @@ from crossmodalrag.generate.answer import (
     format_generated_answer,
     format_grounded_answer,
     generated_answer_to_dict,
+    template_answer_to_dict,
 )
 from crossmodalrag.generate.provider import LLMUnavailable, get_default_llm_provider
 from crossmodalrag.generate.synthesize import synthesize_answer
@@ -48,15 +44,14 @@ from crossmodalrag.ingest.git import ingest_git
 from crossmodalrag.ingest.image import ingest_images
 from crossmodalrag.ingest.notes import ingest_notes
 from crossmodalrag.ingest.pdf import ingest_pdf
-from crossmodalrag.modality import format_locator, parse_locator
 from crossmodalrag.progress import make_progress
+from crossmodalrag.service import retrieve_for_answer
 from crossmodalrag.retrieve.rerank import MODALITY_SOURCE_TYPES, resolve_source_types
 from crossmodalrag.memory.concepts import build_concepts
 from crossmodalrag.memory.episodes import build_episodes
 from crossmodalrag.memory.extract import extract_pending_sources
 from crossmodalrag.memory.graph import build_graph
-from crossmodalrag.retrieve.hybrid import DEFAULT_PROFILE, PROFILE_WEIGHTS, retrieve
-from crossmodalrag.retrieve.nodes import candidate_chunk_ids, retrieve_nodes
+from crossmodalrag.retrieve.hybrid import DEFAULT_PROFILE, PROFILE_WEIGHTS
 from crossmodalrag.sample_data import default_sample_db_path, seed_sample_data
 
 def init_db_cmd() -> None:
@@ -177,36 +172,13 @@ def ask_cmd(
     track: bool | None = None,
 ) -> None:
     db_path = get_db_path()
-    restrict_source_types = resolve_source_types(modalities)
     # Usage tracking is opt-in: off unless enabled by env / --track / --accept, and never by --no-track.
     track_enabled = False if track is False else (bool(track) or accept or usage_tracking_enabled())
     conn = connect(db_path)
-    matched_nodes = []
     try:
-        if level == "evidence":
-            hits = retrieve(
-                conn,
-                query=query,
-                top_k=top_k,
-                profile=profile,
-                restrict_source_types=restrict_source_types,
-            )
-        else:
-            # Retrieve at the target level, then ground in the matched nodes' L0 evidence.
-            matched_nodes = retrieve_nodes(conn, query, level=level, top_k=top_k, profile=profile)
-            chunk_ids = candidate_chunk_ids(conn, matched_nodes)
-            hits = (
-                retrieve(
-                    conn,
-                    query=query,
-                    top_k=top_k,
-                    profile=profile,
-                    restrict_chunk_ids=chunk_ids,
-                    restrict_source_types=restrict_source_types,
-                )
-                if chunk_ids
-                else []
-            )
+        hits, matched_nodes = retrieve_for_answer(
+            conn, query=query, top_k=top_k, profile=profile, level=level, modalities=modalities
+        )
     finally:
         conn.close()
 
@@ -250,36 +222,7 @@ def ask_cmd(
 
     # No LLM (disabled or unavailable): deterministic evidence template.
     if as_json:
-        data = {
-            "query": query,
-            "model": None,
-            "abstained": not hits,
-            "answer": None,
-            "evidence": [
-                {
-                    "evidence_id": f"E{i}",
-                    "source_id": hit.source_id,
-                    "chunk_id": hit.chunk_id,
-                    "source_type": hit.source_type,
-                    "source_uri": hit.source_uri,
-                    "title": hit.title,
-                    "modality": (loc.modality if (loc := parse_locator(hit.chunk_metadata_json)) else None),
-                    "locator": format_locator(hit.source_uri, parse_locator(hit.chunk_metadata_json)),
-                    "page": (loc.page if (loc := parse_locator(hit.chunk_metadata_json)) else None),
-                    "ocr_confidence": (
-                        loc.ocr_confidence if (loc := parse_locator(hit.chunk_metadata_json)) else None
-                    ),
-                    "scores": {
-                        "combined": hit.score,
-                        "vector": hit.vector_score,
-                        "lexical": hit.lexical_score,
-                        "recency": hit.recency_score,
-                        "usage": hit.usage_score,
-                    },
-                }
-                for i, hit in enumerate(hits, start=1)
-            ],
-        }
+        data = template_answer_to_dict(query, hits)
         if matched_payload:
             data["matched_nodes"] = matched_payload
         print(json.dumps(data, indent=2))
@@ -995,61 +938,19 @@ def sync_cmd(max_commits: int = 300, only: list[str] | None = None, as_json: boo
     print(f"Total inserted chunks (changed sources): {total_inserted}")
 
 
-def _ping_ollama() -> bool:
-    """Best-effort reachability check for the local Ollama server (never raises)."""
-    import urllib.request
-
-    url = f"{get_llm_base_url()}/api/tags"
-    timeout = min(get_llm_timeout(), 2.0)
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - localhost only
-            return 200 <= resp.status < 300
-    except Exception:
-        return False
-
-
 def doctor_cmd(as_json: bool = False) -> None:
     """Read-only health check: DB, installed extras, Ollama reachability, models, connectors, memory."""
-    from crossmodalrag.capabilities import has_ocr, has_pdf
-    from crossmodalrag.memory.integrity import memory_stats
+    from crossmodalrag.service import health_report
 
-    db_path = get_db_path()
-    db_exists = db_path.exists()
-    provider = get_default_provider()
-    embed_model = provider.name if provider is not None else None
-
-    stats = None
-    if db_exists:
-        conn = connect(db_path)
-        try:
-            init_db(conn)
-            stats = memory_stats(conn)
-        finally:
-            conn.close()
-
-    report = {
-        "db": {
-            "path": str(db_path),
-            "exists": db_exists,
-            "size_bytes": (db_path.stat().st_size if db_exists else 0),
-        },
-        "extras": {"embeddings": provider is not None, "pdf": has_pdf(), "ocr": has_ocr()},
-        "ollama": {"base_url": get_llm_base_url(), "reachable": _ping_ollama()},
-        "models": {"embed": embed_model, "llm": get_llm_model(), "extract": get_extract_model()},
-        "config": {
-            "path": (str(get_config_path()) if get_config_path() is not None else None),
-            "loaded": bool(load_config()),
-        },
-        "connectors": {name: len(get_connector_paths(name)) for name, _ in _SYNC_CONNECTORS},
-        "memory": stats,
-    }
+    report = health_report()
+    stats = report["memory"]
 
     if as_json:
         print(json.dumps(report, indent=2))
         return
 
-    print(f"CrossModalRAG doctor — DB: {db_path}")
-    print(f"  DB exists: {db_exists} ({report['db']['size_bytes']} bytes)")
+    print(f"CrossModalRAG doctor — DB: {report['db']['path']}")
+    print(f"  DB exists: {report['db']['exists']} ({report['db']['size_bytes']} bytes)")
     ex = report["extras"]
     print(f"  Extras: embeddings={ex['embeddings']} pdf={ex['pdf']} ocr={ex['ocr']}")
     print(f"  Ollama: reachable={report['ollama']['reachable']} ({report['ollama']['base_url']})")
@@ -1127,6 +1028,31 @@ def restore_cmd(src: Path, force: bool = False) -> None:
     print(f"Restored {db_path} from {src} ({db_path.stat().st_size} bytes)")
 
 
+def serve_cmd(host: str = "127.0.0.1", port: int = 8765) -> None:
+    """Run the local read-only HTTP API (requires the `[ui]` extra; binds localhost by default)."""
+    try:
+        import uvicorn
+    except ModuleNotFoundError as exc:
+        raise CLIError(
+            "`mem serve` requires the [ui] extra. Run: pip install -e \".[ui]\""
+        ) from exc
+
+    from crossmodalrag.api import MissingUIBackend, create_app
+
+    try:
+        app = create_app()
+    except MissingUIBackend as exc:
+        raise CLIError(str(exc)) from exc
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"WARNING: binding to {host} exposes the unauthenticated, read-only API beyond localhost.",
+            file=sys.stderr,
+        )
+    print(f"Serving CrossModalRAG local API on http://{host}:{port} (read-only). Press Ctrl-C to stop.")
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CrossModalRAG local memory CLI.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1169,6 +1095,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_restore.add_argument(
         "--force", action="store_true", help="Overwrite the existing database (required when one exists).",
     )
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="Run the local read-only HTTP API for the web UI / Obsidian (requires the [ui] extra; "
+        "binds localhost by default).",
+    )
+    p_serve.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1 / loopback).")
+    p_serve.add_argument("--port", type=int, default=8765, help="Bind port (default 8765).")
 
     p_notes = sub.add_parser(
         "ingest-notes",
@@ -1534,6 +1468,9 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None
         return
     if args.command == "restore":
         restore_cmd(src=args.src, force=args.force)
+        return
+    if args.command == "serve":
+        serve_cmd(host=args.host, port=args.port)
         return
     if args.command == "ingest-notes":
         vault_paths = _resolve_ingest_paths(

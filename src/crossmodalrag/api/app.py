@@ -1,0 +1,164 @@
+"""Local, read-only HTTP API exposing the existing JSON contracts (the UI/Obsidian boundary).
+
+A thin FastAPI wrapper over the library read functions — it adds no retrieval/derivation logic and
+never writes (GET only; usage tracking off). Requires the opt-in ``[ui]`` extra; the module imports
+without it, and ``create_app`` raises ``MissingUIBackend`` when FastAPI is absent.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from datetime import datetime, timezone
+
+
+class MissingUIBackend(RuntimeError):
+    """Raised when the local API is requested without the ``[ui]`` extra installed."""
+
+
+@contextmanager
+def _conn():
+    from crossmodalrag.config import get_db_path
+    from crossmodalrag.db import connect, init_db
+
+    conn = connect(get_db_path())
+    try:
+        init_db(conn)
+        yield conn
+    finally:
+        conn.close()
+
+
+def create_app():
+    """Build the FastAPI app. Raises ``MissingUIBackend`` if the ``[ui]`` extra is not installed."""
+    try:
+        from fastapi import FastAPI, HTTPException, Query
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised via monkeypatch in tests
+        raise MissingUIBackend(
+            "The local API requires the [ui] extra. Run: pip install -e \".[ui]\""
+        ) from exc
+
+    from crossmodalrag.config import get_usage_halflife_days
+    from crossmodalrag.evaluation import distilled_compression_ratio
+    from crossmodalrag.memory.concepts import list_concept_views
+    from crossmodalrag.memory.distill import distilled_summaries, distilled_summary_to_dict
+    from crossmodalrag.memory.drift import concept_drift_summaries, drift_summary_to_dict
+    from crossmodalrag.memory.episodes import list_episode_timeline
+    from crossmodalrag.memory.forgetting import (
+        LEVEL_NAMES,
+        compute_forgetting_risk,
+        forgetting_risk_to_dict,
+    )
+    from crossmodalrag.memory.integrity import memory_stats
+    from crossmodalrag.memory.recall import generate_recall_cards, recall_card_to_dict
+    from crossmodalrag.service import answer_payload, health_report
+    from crossmodalrag.usage.store import usage_summaries
+    from crossmodalrag.usage.strength import usage_summary_to_dict
+
+    app = FastAPI(
+        title="CrossModalRAG local API",
+        version="1",
+        description="Read-only access to the local memory engine. Localhost-only; no auth.",
+    )
+
+    def _levels(level: str):
+        levels = LEVEL_NAMES.get(level)
+        if levels is None:
+            raise HTTPException(status_code=400, detail=f"Unknown level '{level}'.")
+        return levels
+
+    def _now() -> datetime:
+        return datetime.now(timezone.utc)
+
+    @app.get("/health")
+    def health() -> dict:
+        return health_report()
+
+    @app.get("/ask")
+    def ask(
+        q: str = Query(..., description="The query."),
+        top_k: int = 5,
+        profile: str = "balanced",
+        level: str = "evidence",
+        modality: list[str] | None = Query(None),
+        use_llm: bool = True,
+    ) -> dict:
+        with _conn() as conn:
+            return answer_payload(
+                conn, query=q, top_k=top_k, profile=profile, level=level,
+                modalities=modality, use_llm=use_llm,
+            )
+
+    @app.get("/concepts")
+    def concepts(top: int = 20) -> dict:
+        with _conn() as conn:
+            return {"concepts": list_concept_views(conn, top=top)}
+
+    @app.get("/timeline")
+    def timeline(limit: int = 50) -> dict:
+        with _conn() as conn:
+            return {"timeline": list_episode_timeline(conn, limit=limit)}
+
+    @app.get("/memory-stats")
+    def memory_stats_route() -> dict:
+        with _conn() as conn:
+            return memory_stats(conn)
+
+    @app.get("/forgetting")
+    def forgetting(level: str = "concept", top: int = 10, min_support: int = 1) -> dict:
+        with _conn() as conn:
+            items = compute_forgetting_risk(
+                conn, now=_now(), halflife_days=get_usage_halflife_days(),
+                levels=_levels(level), min_support=min_support, top=top,
+            )
+            return {"level": level, "forgetting": [forgetting_risk_to_dict(i) for i in items]}
+
+    @app.get("/recall")
+    def recall(level: str = "concept", top: int = 10, min_support: int = 1) -> dict:
+        from crossmodalrag.config import get_extract_model
+        from crossmodalrag.generate.provider import get_default_llm_provider
+
+        with _conn() as conn:
+            provider = get_default_llm_provider(get_extract_model())
+            cards = generate_recall_cards(
+                conn, provider, now=_now(), halflife_days=get_usage_halflife_days(),
+                levels=_levels(level), top=top, min_support=min_support,
+            )
+            return {"level": level, "recall": [recall_card_to_dict(c) for c in cards]}
+
+    @app.get("/drift")
+    def drift(top: int = 10, min_support: int = 1) -> dict:
+        with _conn() as conn:
+            items = concept_drift_summaries(conn, top=top, min_support=min_support)
+            return {"drift": [drift_summary_to_dict(conn, i) for i in items]}
+
+    @app.get("/distill")
+    def distill(top: int = 10) -> dict:
+        with _conn() as conn:
+            items = distilled_summaries(conn, top=top)
+            return {
+                "distilled": [distilled_summary_to_dict(i) for i in items],
+                "overall_compression_ratio": {
+                    "episode": distilled_compression_ratio(conn, level="episode"),
+                    "concept": distilled_compression_ratio(conn, level="concept"),
+                },
+            }
+
+    @app.get("/usage")
+    def usage(top: int = 10) -> dict:
+        from crossmodalrag.config import usage_tracking_enabled
+
+        with _conn() as conn:
+            total = conn.execute("SELECT COUNT(*) AS n FROM usage_events").fetchone()["n"]
+            by_type = conn.execute(
+                "SELECT event_type, COUNT(*) AS n FROM usage_events GROUP BY event_type ORDER BY event_type"
+            ).fetchall()
+            summaries = usage_summaries(conn, now=_now(), halflife_days=get_usage_halflife_days())
+        top_targets = sorted(summaries.values(), key=lambda s: s.strength, reverse=True)[:top]
+        return {
+            "tracking_enabled": usage_tracking_enabled(),
+            "total_events": int(total),
+            "by_type": {r["event_type"]: int(r["n"]) for r in by_type},
+            "top_targets": [usage_summary_to_dict(s) for s in top_targets],
+        }
+
+    return app

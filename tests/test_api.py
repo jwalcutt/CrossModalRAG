@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+import json
+import sys
+
+import pytest
+
+fastapi = pytest.importorskip("fastapi")  # skips the whole module when the [ui] extra is absent
+from fastapi.testclient import TestClient  # noqa: E402
+
+from crossmodalrag import cli  # noqa: E402
+from crossmodalrag.api import MissingUIBackend, create_app  # noqa: E402
+from crossmodalrag.db import connect, init_db  # noqa: E402
+from crossmodalrag.memory.store import add_edge  # noqa: E402
+from crossmodalrag.usage.store import record_usage_event  # noqa: E402
+
+
+@pytest.fixture
+def built_db(tmp_path, monkeypatch):
+    """A small DB with a concept + events + episode + one usage event, wired as CMRAG_DB_PATH."""
+    db = tmp_path / "memory.db"
+    conn = connect(db)
+    init_db(conn)
+
+    def _event(text):
+        cur = conn.execute("INSERT INTO sources (source_type, source_uri) VALUES ('note', ?)", (f"/v/{text}.md",))
+        sid = int(cur.lastrowid)
+        cur = conn.execute(
+            "INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text) VALUES (?, 0, ?)", (sid, text)
+        )
+        chunk_id = int(cur.lastrowid)
+        cur = conn.execute(
+            "INSERT INTO memory_nodes (level, node_type, title, time_start) VALUES (1, 'event', ?, ?)",
+            (text, "2026-01-01T00:00:00+00:00"),
+        )
+        eid = int(cur.lastrowid)
+        add_edge(conn, 1, eid, 0, chunk_id, "derived_from")
+        return eid, chunk_id
+
+    e1, c1 = _event("parser bounds fix")
+    e2, _ = _event("parser overflow guard")
+    cur = conn.execute(
+        "INSERT INTO memory_nodes (level, node_type, title, centrality) VALUES (3, 'concept', ?, 0.9)",
+        ("Parser hardening",),
+    )
+    cid = int(cur.lastrowid)
+    add_edge(conn, 3, cid, 1, e1, "contains")
+    add_edge(conn, 3, cid, 1, e2, "contains")
+    cur = conn.execute(
+        "INSERT INTO memory_nodes (level, node_type, title, time_start, time_end) VALUES "
+        "(2, 'episode', ?, ?, ?)",
+        ("Parser session", "2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"),
+    )
+    add_edge(conn, 2, int(cur.lastrowid), 1, e1, "contains")
+    record_usage_event(conn, "chunk", c1, "retrieval_hit", event_at="2026-01-01T00:00:00+00:00")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("CMRAG_DB_PATH", str(db))
+    # Keep /health deterministic + offline.
+    import crossmodalrag.service as svc
+    monkeypatch.setattr(svc, "ping_ollama", lambda: False)
+    return db, cid
+
+
+@pytest.fixture
+def client(built_db):
+    return TestClient(create_app())
+
+
+# --- endpoint contracts -------------------------------------------------------
+
+
+def test_health(client):
+    r = client.get("/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"db", "extras", "ollama", "models", "config", "connectors", "memory"}
+    assert body["ollama"]["reachable"] is False
+
+
+def test_memory_stats(client):
+    body = client.get("/memory-stats").json()
+    assert body["nodes_by_level"]["3"] == 1 and "integrity" in body
+
+
+def test_concepts_and_timeline(client, built_db):
+    _, cid = built_db
+    concepts = client.get("/concepts").json()["concepts"]
+    assert concepts and concepts[0]["node_id"] == cid and concepts[0]["members"] == 2
+    timeline = client.get("/timeline").json()["timeline"]
+    assert timeline and set(timeline[0]) == {"node_id", "title", "time_start", "time_end", "members"}
+
+
+def test_forgetting(client):
+    body = client.get("/forgetting", params={"level": "concept"}).json()
+    assert body["level"] == "concept"
+    assert body["forgetting"] and "evidence_source_uris" in body["forgetting"][0]
+
+
+def test_drift_distill_usage_shapes(client):
+    assert "drift" in client.get("/drift").json()
+    distill = client.get("/distill").json()
+    assert set(distill) == {"distilled", "overall_compression_ratio"}
+    usage = client.get("/usage").json()
+    assert usage["total_events"] == 1 and set(usage) == {
+        "tracking_enabled", "total_events", "by_type", "top_targets"
+    }
+
+
+def test_ask_offline_template(client):
+    body = client.get("/ask", params={"q": "parser", "use_llm": "false"}).json()
+    assert set(body) >= {"query", "model", "abstained", "answer", "evidence"}
+    assert body["model"] is None  # no-LLM template path
+    if body["evidence"]:
+        assert "source_uri" in body["evidence"][0] and "locator" in body["evidence"][0]
+
+
+def test_bad_level_is_400(client):
+    assert client.get("/forgetting", params={"level": "nonsense"}).status_code == 400
+
+
+def test_routes_are_get_only(client):
+    assert client.post("/concepts").status_code == 405  # read-only API
+
+
+# --- thin-client guarantee: API payload == CLI --json payload -----------------
+
+
+def test_api_matches_cli_concepts(client, built_db, monkeypatch, capsys):
+    api_body = client.get("/concepts").json()
+    monkeypatch.setattr(cli, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv", ["mem", "concepts", "--json"])
+    cli.main()
+    cli_body = json.loads(capsys.readouterr().out)
+    assert api_body == cli_body  # same library contract, two surfaces
+
+
+# --- serve degradation --------------------------------------------------------
+
+
+def test_serve_cmd_translates_missing_backend(monkeypatch):
+    import crossmodalrag.api as api
+
+    def _boom():
+        raise MissingUIBackend("need the [ui] extra")
+
+    monkeypatch.setattr(api, "create_app", _boom)
+    with pytest.raises(cli.CLIError):
+        cli.serve_cmd()

@@ -137,6 +137,42 @@ def generated_answer_to_dict(gen: GeneratedAnswer) -> dict:
     }
 
 
+def template_answer_to_dict(query: str, hits: list[RetrievalHit]) -> dict:
+    """No-LLM evidence-template payload (same shape `mem ask --no-llm --json` emits).
+
+    The deterministic counterpart to ``generated_answer_to_dict``: lists the retrieved evidence with
+    provenance (modality + locator) but no synthesized answer or citations. Stable/additive contract.
+    """
+    return {
+        "query": query,
+        "model": None,
+        "abstained": not hits,
+        "answer": None,
+        "evidence": [
+            {
+                "evidence_id": f"E{i}",
+                "source_id": hit.source_id,
+                "chunk_id": hit.chunk_id,
+                "source_type": hit.source_type,
+                "source_uri": hit.source_uri,
+                "title": hit.title,
+                "modality": _modality_of(hit),
+                "locator": format_locator(hit.source_uri, _locator(hit)),
+                "page": _page_of(hit),
+                "ocr_confidence": _ocr_conf_of(hit),
+                "scores": {
+                    "combined": hit.score,
+                    "vector": hit.vector_score,
+                    "lexical": hit.lexical_score,
+                    "recency": hit.recency_score,
+                    "usage": hit.usage_score,
+                },
+            }
+            for i, hit in enumerate(hits, start=1)
+        ],
+    }
+
+
 def _modality_of(hit: RetrievalHit) -> str | None:
     loc = _locator(hit)
     return loc.modality if loc is not None else None

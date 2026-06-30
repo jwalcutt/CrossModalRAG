@@ -140,7 +140,8 @@ def test_sync_only_filter(sync_env, monkeypatch, capsys):
 def test_doctor_json_reports_health_offline(monkeypatch, capsys, tmp_path):
     _isolate_env(monkeypatch)
     monkeypatch.setenv("CMRAG_DB_PATH", str(tmp_path / "memory.db"))
-    monkeypatch.setattr(cli, "_ping_ollama", lambda: False)  # deterministic, offline
+    import crossmodalrag.service as svc
+    monkeypatch.setattr(svc, "ping_ollama", lambda: False)  # deterministic, offline
     _run(monkeypatch, ["doctor", "--json"])
     report = json.loads(capsys.readouterr().out)
     assert set(report) == {"db", "extras", "ollama", "models", "config", "connectors", "memory"}
@@ -151,7 +152,8 @@ def test_doctor_json_reports_health_offline(monkeypatch, capsys, tmp_path):
 def test_doctor_text_runs(monkeypatch, capsys, tmp_path):
     _isolate_env(monkeypatch)
     monkeypatch.setenv("CMRAG_DB_PATH", str(tmp_path / "memory.db"))
-    monkeypatch.setattr(cli, "_ping_ollama", lambda: False)
+    import crossmodalrag.service as svc
+    monkeypatch.setattr(svc, "ping_ollama", lambda: False)
     _run(monkeypatch, ["doctor"])
     out = capsys.readouterr().out
     assert "doctor" in out and "Ollama: reachable=False" in out
