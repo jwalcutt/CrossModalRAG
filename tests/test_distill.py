@@ -15,7 +15,11 @@ from crossmodalrag.evaluation import (
     run_distilled_eval,
     run_eval,
 )
-from crossmodalrag.memory.distill import build_distilled
+from crossmodalrag.memory.distill import (
+    build_distilled,
+    distilled_summaries,
+    distilled_summary_to_dict,
+)
 from crossmodalrag.memory.store import add_edge, resolve_to_evidence
 from crossmodalrag.retrieve.distilled import distilled_drilldown_source_uris, retrieve_distilled
 
@@ -275,3 +279,49 @@ def test_gate_fires_when_preserved_and_compressed(conn):
     assert distill_gate_fires(full, distilled, compression_ratio=0.5) is True
     # Same recall but no compression -> hold.
     assert distill_gate_fires(full, distilled, compression_ratio=0.9) is False
+
+
+# --- read view + JSON contract ----------------------------------------------------------
+
+DISTILL_JSON_KEYS = {
+    "node_id",
+    "level",
+    "node_type",
+    "title",
+    "summary",
+    "core_count",
+    "full_count",
+    "compression_ratio",
+    "confidence",
+    "evidence_source_uri",
+}
+
+
+def test_distilled_summaries_report_compression_and_grounding(conn):
+    members = [_add_event_with_chunk(conn, f"iota chunk {i}") for i in range(4)]
+    cid = _make_concept(conn, "iota concept", [e for e, _, _ in members])
+    embed_pending_chunks(conn, StubEmbedProvider())
+    build_distilled(conn, StubEmbedProvider(), StubLLMProvider(), target_ratio=0.5)
+
+    summaries = distilled_summaries(conn)
+    assert len(summaries) == 1
+    s = summaries[0]
+    assert s.node_id == cid
+    assert s.core_count <= s.full_count
+    assert s.full_count == 4 and s.core_count == 2
+    assert s.compression_ratio == pytest.approx(s.core_count / s.full_count)
+    assert s.evidence_source_uri in {uri for _, _, uri in members}  # grounded to a real source
+
+
+def test_distilled_summary_to_dict_is_stable_contract(conn):
+    members = [_add_event_with_chunk(conn, f"kappa chunk {i}") for i in range(2)]
+    _make_concept(conn, "kappa concept", [e for e, _, _ in members])
+    embed_pending_chunks(conn, StubEmbedProvider())
+    build_distilled(conn, StubEmbedProvider(), StubLLMProvider(), target_ratio=0.5)
+
+    payload = distilled_summary_to_dict(distilled_summaries(conn)[0])
+    assert set(payload) == DISTILL_JSON_KEYS  # additive-only contract
+
+
+def test_distilled_summaries_empty_when_nothing_distilled(conn):
+    assert distilled_summaries(conn) == []

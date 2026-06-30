@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -7,6 +8,18 @@ import pytest
 
 from crossmodalrag import cli
 from crossmodalrag.config import get_numbered_env_paths
+
+
+def _clear_numbered_env(monkeypatch, prefix: str) -> None:
+    """Remove every ``{prefix}_<n>`` from the environment.
+
+    ``cli.main`` calls ``load_dotenv`` which leaks the project's own ``.env`` numbered paths into
+    ``os.environ`` for the whole pytest process, so clearing only indices 1-2 is not enough when the
+    developer's ``.env`` defines more (e.g. REPO_PATH_3). Clear the whole family for isolation.
+    """
+    for key in list(os.environ):
+        if key.startswith(f"{prefix}_"):
+            monkeypatch.delenv(key, raising=False)
 
 
 def test_get_numbered_env_paths_sorts_numeric_suffixes(monkeypatch, tmp_path: Path) -> None:
@@ -29,6 +42,7 @@ def test_main_ingest_notes_uses_local_dotenv_paths_when_no_args(
     monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _clear_numbered_env(monkeypatch, "OBSIDIAN_VAULT_PATH")
     (tmp_path / ".env").write_text(
         "\n".join(
             [
@@ -62,8 +76,7 @@ def test_main_ingest_git_errors_when_no_args_and_no_env(
     monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("REPO_PATH_1", raising=False)
-    monkeypatch.delenv("REPO_PATH_2", raising=False)
+    _clear_numbered_env(monkeypatch, "REPO_PATH")
     monkeypatch.setattr(sys, "argv", ["mem", "ingest-git"])
 
     with pytest.raises(SystemExit) as excinfo:

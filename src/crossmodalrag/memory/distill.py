@@ -9,7 +9,7 @@ from crossmodalrag.config import get_distill_compression_ratio
 from crossmodalrag.embed.provider import EmbeddingProvider
 from crossmodalrag.embed.store import pack_vector, unpack_vector
 from crossmodalrag.generate.provider import LLMProvider, LLMUnavailable
-from crossmodalrag.memory.store import list_nodes, resolve_to_evidence
+from crossmodalrag.memory.store import get_node, list_nodes, resolve_to_evidence
 
 DISTILL_VERSION = "distill-v1"
 DISTILL_PROMPT_VERSION = "distill-summary-v1"
@@ -31,6 +31,20 @@ class DistillResult:
     nodes_deleted: int
     named_by_llm: int
     named_by_fallback: int
+
+
+@dataclass(frozen=True)
+class DistilledSummary:
+    node_id: int
+    level: int
+    node_type: str | None
+    title: str | None
+    summary: str | None
+    core_count: int          # kept (core) L0 chunks
+    full_count: int          # the node's total L0 evidence chunks
+    compression_ratio: float  # core_count / full_count (smaller = more compressed)
+    confidence: float | None
+    evidence_source_uri: str | None
 
 
 def build_distilled(
@@ -202,6 +216,72 @@ def _cosine(a: list[float], b: list[float]) -> float:
     na = float(np.linalg.norm(va)) or 1.0
     nb = float(np.linalg.norm(vb)) or 1.0
     return float(va @ vb) / (na * nb)
+
+
+def distilled_summaries(
+    conn: sqlite3.Connection, *, top: int | None = None
+) -> list[DistilledSummary]:
+    """Read-only view of the distilled stand-ins, most-compressed first.
+
+    For each distilled node, reports the kept (core) vs full L0 evidence counts, the achieved
+    compression ratio, and a grounding source URI (from the core subset) so the surface stays
+    provenance-anchored.
+    """
+    rows = conn.execute(
+        "SELECT node_id, level, summary, core_evidence_json, confidence FROM distilled_nodes"
+    ).fetchall()
+    summaries: list[DistilledSummary] = []
+    for row in rows:
+        node_id = int(row["node_id"])
+        level = int(row["level"])
+        core_ids = [int(c) for c in json.loads(row["core_evidence_json"] or "[]")]
+        full_count = len(resolve_to_evidence(conn, level, node_id))
+        core_count = len(core_ids)
+        node = get_node(conn, node_id)
+        summaries.append(
+            DistilledSummary(
+                node_id=node_id,
+                level=level,
+                node_type=node.node_type if node else None,
+                title=node.title if node else None,
+                summary=row["summary"],
+                core_count=core_count,
+                full_count=full_count,
+                compression_ratio=(core_count / full_count) if full_count else 1.0,
+                confidence=(float(row["confidence"]) if row["confidence"] is not None else None),
+                evidence_source_uri=_chunk_source_uri(conn, core_ids[0]) if core_ids else None,
+            )
+        )
+    summaries.sort(key=lambda s: (s.compression_ratio, s.node_id))
+    return summaries[:top] if top is not None else summaries
+
+
+def distilled_summary_to_dict(summary: DistilledSummary) -> dict:
+    """Stable JSON contract for `mem distill --json`. Keep field names backward-compatible."""
+    return {
+        "node_id": summary.node_id,
+        "level": summary.level,
+        "node_type": summary.node_type,
+        "title": summary.title,
+        "summary": summary.summary,
+        "core_count": summary.core_count,
+        "full_count": summary.full_count,
+        "compression_ratio": summary.compression_ratio,
+        "confidence": summary.confidence,
+        "evidence_source_uri": summary.evidence_source_uri,
+    }
+
+
+def _chunk_source_uri(conn: sqlite3.Connection, chunk_id: int) -> str | None:
+    row = conn.execute(
+        """
+        SELECT s.source_uri AS uri
+        FROM evidence_chunks c JOIN sources s ON s.id = c.source_id
+        WHERE c.id = ?
+        """,
+        (chunk_id,),
+    ).fetchone()
+    return str(row["uri"]) if row else None
 
 
 def _distill_fingerprint(

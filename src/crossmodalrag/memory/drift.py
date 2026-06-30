@@ -224,6 +224,53 @@ def concept_drift_summaries(
     return summaries[:top] if top is not None else summaries
 
 
+def concept_drift_windows(conn: sqlite3.Connection, concept_id: int) -> list[dict]:
+    """The per-window movement trajectory for one concept (ordered by window start).
+
+    The series a concept-movement view plots: each entry is one time window with its drift metric
+    (movement vs the previous window) and member-event support.
+    """
+    rows = conn.execute(
+        """
+        SELECT window_start, window_end, drift_metric, support
+        FROM drift_snapshots
+        WHERE concept_id = ?
+        ORDER BY window_start
+        """,
+        (concept_id,),
+    ).fetchall()
+    return [
+        {
+            "window_start": str(r["window_start"]),
+            "window_end": str(r["window_end"]),
+            "drift_metric": float(r["drift_metric"]),
+            "support": int(r["support"]),
+        }
+        for r in rows
+    ]
+
+
+def drift_summary_to_dict(conn: sqlite3.Connection, summary: DriftSummary) -> dict:
+    """Stable JSON contract for `mem drift --json` (UI concept-movement view).
+
+    Keep field names backward-compatible; only add keys. ``concept_id`` is the stable drill-down id
+    and ``windows`` is the movement trajectory.
+    """
+    return {
+        "concept_id": summary.concept_id,
+        "title": summary.title,
+        "overall_drift": summary.overall_drift,
+        "window_count": summary.window_count,
+        "support": summary.support,
+        "confidence": summary.confidence,
+        "relearning": summary.relearning,
+        "span_start": summary.span_start,
+        "span_end": summary.span_end,
+        "evidence_source_uri": summary.evidence_source_uri,
+        "windows": concept_drift_windows(conn, summary.concept_id),
+    }
+
+
 def _is_relearning(windows: list[sqlite3.Row]) -> bool:
     """True when two active windows are separated by >=1 empty window (a re-engagement gap).
 

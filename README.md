@@ -203,6 +203,14 @@ Requires [Ollama](https://ollama.com) running locally with a model pulled
   shows window count, span, support, confidence, and a grounding URI. Build the snapshots first with
   `mem build-memory --level drift` (deterministic, no LLM; needs the `[embeddings]` extra); `mem drift`
   is a read-only view. Note timestamps drive the windows — see "date-aware note dates" below.
+  `mem drift --json` emits a stable contract (per concept: `concept_id`, `overall_drift`, `relearning`,
+  a grounding URI, and a `windows` array — the movement trajectory for a UI to plot).
+- **Distilled stand-ins** (`mem distill`): lists the compact, retrieval-preserving representations
+  built by `mem build-memory --level distill` — for each L2/L3 node, its summary, the kept (core) vs
+  full L0 evidence counts, the achieved compression ratio, confidence, and a grounding URI. Read-only.
+  `mem distill --json` adds a stable per-node contract plus the per-level `overall_compression_ratio`.
+  Whether to actually retrieve via these stand-ins in production is decided by the distillation gate
+  (`scripts/distill_gate.py`), not enabled by default — see the distillation gate section below.
 - `--level` chooses the retrieval level: `evidence` (default, L0 chunks) or a memory level
   (`event`/`episode`/`concept`). At a memory level, `ask` retrieves the matching nodes, prints them,
   then drills them down to their L0 evidence and answers grounded in (and citing) that L0 — so
@@ -266,12 +274,13 @@ checks for measuring no regression.
 - `mem usage [--clear] [--top N]` (local usage-tracking stats; `--clear` wipes the history)
 - `mem forgetting [--level concept|episode|event|all] [--top N] [--min-support N]` ("what am I likely forgetting?" — important-but-stale memories, grounded to evidence)
 - `mem recall [--level concept|episode|event|all] [--top N] [--min-support N] [--regenerate]` (grounded active-recall study cards for the highest forgetting-risk memories)
-- `mem drift [--top N] [--min-support N]` (concept drift over time windows; read-only — run `mem build-memory --level drift` first, needs the `[embeddings]` extra)
+- `mem drift [--top N] [--min-support N] [--json]` (concept drift over time windows; read-only — run `mem build-memory --level drift` first, needs the `[embeddings]` extra)
+- `mem distill [--top N] [--json]` (list distilled node stand-ins: core/full evidence + compression ratio; read-only — run `mem build-memory --level distill` first)
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...] [--modality text|code|pdf|image ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
 - `mem build-memory [--level event|episode|concept|graph|drift|distill|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts + drift + distill need the `[embeddings]` extra; episode/graph need neither)
-- `mem memory-stats`
+- `mem memory-stats` (node/edge counts, integrity, plus distilled-node + drift-snapshot counts)
 - `mem concepts [--top N]` (L3 concepts by centrality)
 - `mem timeline [--limit N]` (L2 episodes, oldest first)
 

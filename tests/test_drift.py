@@ -6,7 +6,12 @@ import re
 import pytest
 
 from crossmodalrag.db import connect, init_db
-from crossmodalrag.memory.drift import build_drift, concept_drift_summaries
+from crossmodalrag.memory.drift import (
+    build_drift,
+    concept_drift_summaries,
+    concept_drift_windows,
+    drift_summary_to_dict,
+)
 from crossmodalrag.memory.store import add_edge, resolve_to_evidence
 
 WORD_RE = re.compile(r"[a-z0-9]+")
@@ -233,3 +238,50 @@ def test_build_drift_does_not_touch_memory_nodes_or_edges(conn):
     build_drift(conn, StubEmbedProvider(), window_days=WINDOW_DAYS)
     # The drift layer is additive/separable: it writes only drift_snapshots.
     assert _mem_snapshot() == before
+
+
+# --- JSON contract (UI concept-movement view) ---------------------------------
+
+DRIFT_JSON_KEYS = {
+    "concept_id",
+    "title",
+    "overall_drift",
+    "window_count",
+    "support",
+    "confidence",
+    "relearning",
+    "span_start",
+    "span_end",
+    "evidence_source_uri",
+    "windows",
+}
+
+
+def test_drift_summary_to_dict_is_stable_contract(conn):
+    e1 = _add_event(conn, "alpha beta", WIN0)
+    e2 = _add_event(conn, "gamma delta", WIN1)
+    cid = _make_concept(conn, "json concept", [e1, e2])
+    build_drift(conn, StubEmbedProvider(), window_days=WINDOW_DAYS)
+
+    summary = concept_drift_summaries(conn)[0]
+    payload = drift_summary_to_dict(conn, summary)
+
+    assert set(payload) == DRIFT_JSON_KEYS  # additive-only contract
+    assert payload["concept_id"] == cid  # stable drill-down id
+    assert payload["evidence_source_uri"]  # grounded
+
+
+def test_drift_windows_trajectory_matches_snapshots(conn):
+    e1 = _add_event(conn, "alpha beta", WIN0)
+    e2 = _add_event(conn, "gamma delta", WIN1)
+    cid = _make_concept(conn, "traj", [e1, e2])
+    build_drift(conn, StubEmbedProvider(), window_days=WINDOW_DAYS)
+
+    windows = concept_drift_windows(conn, cid)
+    assert len(windows) == 2
+    assert [w["window_start"] for w in windows] == sorted(w["window_start"] for w in windows)
+    for w in windows:
+        assert set(w) == {"window_start", "window_end", "drift_metric", "support"}
+    # The dict view embeds the same trajectory.
+    payload = drift_summary_to_dict(conn, concept_drift_summaries(conn)[0])
+    assert payload["windows"] == windows

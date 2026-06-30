@@ -546,6 +546,8 @@ def memory_stats_cmd() -> None:
         relates_edges = conn.execute(
             "SELECT COUNT(*) AS n FROM memory_edges WHERE relation = 'relates_to'"
         ).fetchone()["n"]
+        distilled_count = conn.execute("SELECT COUNT(*) AS n FROM distilled_nodes").fetchone()["n"]
+        drift_count = conn.execute("SELECT COUNT(*) AS n FROM drift_snapshots").fetchone()["n"]
         top_central = conn.execute(
             "SELECT id, level, title, centrality FROM memory_nodes "
             "WHERE centrality IS NOT NULL ORDER BY centrality DESC, id ASC LIMIT 3"
@@ -563,6 +565,8 @@ def memory_stats_cmd() -> None:
     print(f"Memory edges: {edges}")
     print(f"Concept co-occurrence edges (relates_to): {relates_edges}")
     print(f"Node embeddings: {node_vectors}")
+    print(f"Distilled nodes: {distilled_count}")
+    print(f"Drift snapshots: {drift_count}")
     if top_central:
         print("Top central nodes:")
         for row in top_central:
@@ -655,16 +659,22 @@ def forgetting_cmd(level: str = "concept", top: int = 10, min_support: int = 1) 
             print(f"      evidence: {', '.join(item.evidence_source_uris)}")
 
 
-def drift_cmd(top: int = 10, min_support: int = 1) -> None:
-    from crossmodalrag.memory.drift import concept_drift_summaries
+def drift_cmd(top: int = 10, min_support: int = 1, as_json: bool = False) -> None:
+    from crossmodalrag.memory.drift import concept_drift_summaries, drift_summary_to_dict
 
     db_path = get_db_path()
     conn = connect(db_path)
     try:
         init_db(conn)
         items = concept_drift_summaries(conn, top=top, min_support=min_support)
+        if as_json:
+            payload = {"drift": [drift_summary_to_dict(conn, item) for item in items]}
     finally:
         conn.close()
+
+    if as_json:
+        print(json.dumps(payload, indent=2))
+        return
 
     print(f"Concept drift — DB: {db_path}")
     if not items:
@@ -681,6 +691,50 @@ def drift_cmd(top: int = 10, min_support: int = 1) -> None:
             f"  [drift={item.overall_drift:.3f}] concept #{item.concept_id}: {title}{tags}\n"
             f"      windows={item.window_count} support={item.support} "
             f"confidence={item.confidence:.3f} span={item.span_start[:10]}..{item.span_end[:10]}"
+        )
+        if item.evidence_source_uri:
+            print(f"      evidence: {item.evidence_source_uri}")
+
+
+def distill_cmd(top: int = 10, as_json: bool = False) -> None:
+    from crossmodalrag.evaluation import distilled_compression_ratio
+    from crossmodalrag.memory.distill import distilled_summaries, distilled_summary_to_dict
+
+    db_path = get_db_path()
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        items = distilled_summaries(conn, top=top)
+        if as_json:
+            payload = {
+                "distilled": [distilled_summary_to_dict(item) for item in items],
+                "overall_compression_ratio": {
+                    "episode": distilled_compression_ratio(conn, level="episode"),
+                    "concept": distilled_compression_ratio(conn, level="concept"),
+                },
+            }
+    finally:
+        conn.close()
+
+    if as_json:
+        print(json.dumps(payload, indent=2))
+        return
+
+    print(f"Distilled nodes — DB: {db_path}")
+    if not items:
+        print(
+            "No distilled nodes found. Run `mem build-memory --level distill` first "
+            "(needs the embeddings extra)."
+        )
+        return
+    print("Retrieval-preserving stand-ins (most compressed first):")
+    for item in items:
+        title = item.title or "untitled"
+        conf = f" confidence={item.confidence:.3f}" if item.confidence is not None else ""
+        print(
+            f"  L{item.level} #{item.node_id}: {title}\n"
+            f"      core/full evidence={item.core_count}/{item.full_count} "
+            f"ratio={item.compression_ratio:.3f}{conf}"
         )
         if item.evidence_source_uri:
             print(f"      evidence: {item.evidence_source_uri}")
@@ -1071,6 +1125,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Minimum total member events (across windows) for a concept to be shown.",
     )
+    p_drift.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the drift summaries as JSON (stable contract incl. the per-window trajectory).",
+    )
+
+    p_distill = sub.add_parser(
+        "distill",
+        help="List distilled node stand-ins (core vs full evidence, compression ratio). Read-only; "
+        "run `mem build-memory --level distill` first.",
+    )
+    p_distill.add_argument("--top", type=int, default=10)
+    p_distill.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the distilled summaries as JSON (stable contract + overall compression ratio).",
+    )
 
     p_recall = sub.add_parser(
         "recall",
@@ -1241,7 +1312,10 @@ def main() -> None:
         forgetting_cmd(level=args.level, top=args.top, min_support=args.min_support)
         return
     if args.command == "drift":
-        drift_cmd(top=args.top, min_support=args.min_support)
+        drift_cmd(top=args.top, min_support=args.min_support, as_json=args.json)
+        return
+    if args.command == "distill":
+        distill_cmd(top=args.top, as_json=args.json)
         return
     if args.command == "recall":
         recall_cmd(
