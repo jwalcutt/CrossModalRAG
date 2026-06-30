@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
 from crossmodalrag.config import (
+    get_config_path,
+    get_connector_paths,
     get_db_path,
+    get_default_profile,
+    get_default_top_k,
     get_extract_model,
-    get_numbered_env_paths,
+    get_llm_base_url,
+    get_llm_model,
+    get_llm_timeout,
+    load_config,
     load_dotenv,
     usage_tracking_enabled,
 )
@@ -41,6 +49,7 @@ from crossmodalrag.ingest.image import ingest_images
 from crossmodalrag.ingest.notes import ingest_notes
 from crossmodalrag.ingest.pdf import ingest_pdf
 from crossmodalrag.modality import format_locator, parse_locator
+from crossmodalrag.progress import make_progress
 from crossmodalrag.retrieve.rerank import MODALITY_SOURCE_TYPES, resolve_source_types
 from crossmodalrag.memory.concepts import build_concepts
 from crossmodalrag.memory.episodes import build_episodes
@@ -68,7 +77,10 @@ def ingest_notes_cmd(vault_paths: list[Path]) -> None:
         init_db(conn)
         total_inserted = 0
         for vault_path in vault_paths:
-            inserted = ingest_notes(conn, vault_path=vault_path, embedder=embedder)
+            inserted = ingest_notes(
+                conn, vault_path=vault_path, embedder=embedder,
+                progress=make_progress(f"notes {vault_path.name}"),
+            )
             total_inserted += inserted
             print(f"Ingested notes from {vault_path} into {db_path}. Inserted chunks: {inserted}")
     finally:
@@ -88,7 +100,8 @@ def ingest_git_cmd(repo_paths: list[Path], max_commits: int = 300) -> None:
         total_inserted = 0
         for repo_path in repo_paths:
             inserted = ingest_git(
-                conn, repo_path=repo_path, max_commits=max_commits, embedder=embedder
+                conn, repo_path=repo_path, max_commits=max_commits, embedder=embedder,
+                progress=make_progress(f"git {repo_path.name}"),
             )
             total_inserted += inserted
             print(
@@ -110,7 +123,10 @@ def ingest_pdf_cmd(pdf_paths: list[Path]) -> None:
         init_db(conn)
         total_inserted = 0
         for pdf_path in pdf_paths:
-            inserted = ingest_pdf(conn, pdf_path=pdf_path, embedder=embedder)
+            inserted = ingest_pdf(
+                conn, pdf_path=pdf_path, embedder=embedder,
+                progress=make_progress(f"pdf {pdf_path.name}"),
+            )
             total_inserted += inserted
             print(f"Ingested PDF(s) from {pdf_path} into {db_path}. Inserted chunks: {inserted}")
     except MissingModalityBackend as exc:
@@ -131,7 +147,10 @@ def ingest_images_cmd(image_paths: list[Path]) -> None:
         init_db(conn)
         total_inserted = 0
         for image_path in image_paths:
-            inserted = ingest_images(conn, image_path=image_path, embedder=embedder)
+            inserted = ingest_images(
+                conn, image_path=image_path, embedder=embedder,
+                progress=make_progress(f"images {image_path.name}"),
+            )
             total_inserted += inserted
             print(f"Ingested image(s) from {image_path} into {db_path}. Inserted chunks: {inserted}")
     except MissingModalityBackend as exc:
@@ -377,12 +396,15 @@ def reindex_embeddings_cmd(batch_size: int = 64, model: str | None = None) -> No
     conn = connect(db_path)
     try:
         init_db(conn)
-        embedded = embed_pending_chunks(conn, provider, batch_size=batch_size)
+        embedded = embed_pending_chunks(
+            conn, provider, batch_size=batch_size, progress=make_progress("embed chunks")
+        )
         total = count_embeddings(conn, model=provider.name)
         nodes_embedded = 0
         for node_type, lvl in (("event", 1), ("episode", 2), ("concept", 3)):
             nodes_embedded += embed_pending_nodes(
-                conn, provider, level=lvl, node_type=node_type, batch_size=batch_size
+                conn, provider, level=lvl, node_type=node_type, batch_size=batch_size,
+                progress=make_progress(f"embed {node_type}s"),
             )
         node_total = count_node_embeddings(conn, model=provider.name)
     finally:
@@ -457,7 +479,9 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
             if provider is None:
                 raise SystemExit("No LLM provider configured (set CMRAG_LLM_PROVIDER).")
             try:
-                result = extract_pending_sources(conn, provider, limit=limit)
+                result = extract_pending_sources(
+                    conn, provider, limit=limit, progress=make_progress("L1 events")
+                )
             except LLMUnavailable as exc:
                 raise SystemExit(str(exc))
             print(f"L1 events | model: {provider.name}")
@@ -887,11 +911,264 @@ def seed_sample_cmd(
     )
 
 
+# Connector families for `mem sync` / `mem doctor`: (name, env prefix).
+_SYNC_CONNECTORS = (
+    ("notes", "OBSIDIAN_VAULT_PATH"),
+    ("git", "REPO_PATH"),
+    ("pdf", "PDF_PATH"),
+    ("image", "IMAGE_PATH"),
+)
+
+
+def sync_cmd(max_commits: int = 300, only: list[str] | None = None, as_json: bool = False) -> None:
+    """Incrementally (re-)ingest every connector configured in the environment, in one pass.
+
+    Idempotent: ingestion fingerprint-skips unchanged sources, so re-running only re-chunks what
+    changed. PDF/image are skipped (not errored) when their extra is absent. A bad path is recorded
+    per-connector and does not abort the rest of the sync.
+    """
+    from crossmodalrag.capabilities import has_ocr, has_pdf
+
+    available = {"notes": True, "git": True, "pdf": has_pdf(), "ocr_ok": has_ocr()}
+    db_path = get_db_path()
+    embedder = get_default_provider()
+    report: list[dict] = []
+    total_inserted = 0
+
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        for name, prefix in _SYNC_CONNECTORS:
+            if only and name not in only:
+                continue
+            paths = get_connector_paths(name)
+            if not paths:
+                report.append({"connector": name, "paths": 0, "inserted": 0, "status": "no-paths"})
+                continue
+            if name == "pdf" and not available["pdf"]:
+                report.append({"connector": name, "paths": len(paths), "inserted": 0,
+                               "status": "skipped: install the [pdf] extra"})
+                continue
+            if name == "image" and not available["ocr_ok"]:
+                report.append({"connector": name, "paths": len(paths), "inserted": 0,
+                               "status": "skipped: install the [ocr] extra + tesseract"})
+                continue
+
+            inserted = 0
+            errors: list[str] = []
+            for p in paths:
+                try:
+                    if name == "notes":
+                        inserted += ingest_notes(conn, vault_path=p, embedder=embedder,
+                                                 progress=make_progress(f"notes {p.name}"))
+                    elif name == "git":
+                        inserted += ingest_git(conn, repo_path=p, max_commits=max_commits,
+                                               embedder=embedder, progress=make_progress(f"git {p.name}"))
+                    elif name == "pdf":
+                        inserted += ingest_pdf(conn, pdf_path=p, embedder=embedder,
+                                               progress=make_progress(f"pdf {p.name}"))
+                    elif name == "image":
+                        inserted += ingest_images(conn, image_path=p, embedder=embedder,
+                                                  progress=make_progress(f"images {p.name}"))
+                except (FileNotFoundError, MissingModalityBackend, sqlite3.Error) as exc:
+                    errors.append(f"{p}: {exc}")
+            total_inserted += inserted
+            status = "ok" if not errors else f"ok with {len(errors)} error(s)"
+            entry = {"connector": name, "paths": len(paths), "inserted": inserted, "status": status}
+            if errors:
+                entry["errors"] = errors
+            report.append(entry)
+    finally:
+        conn.close()
+
+    if as_json:
+        print(json.dumps({"db": str(db_path), "connectors": report, "total_inserted": total_inserted}, indent=2))
+        return
+    print(f"Sync DB: {db_path}")
+    if not report:
+        print("No connectors configured. Set OBSIDIAN_VAULT_PATH_*, REPO_PATH_*, PDF_PATH_*, IMAGE_PATH_* in .env.")
+        return
+    for r in report:
+        print(f"  {r['connector']}: {r['paths']} path(s), {r['inserted']} chunk(s) inserted [{r['status']}]")
+        for err in r.get("errors", []):
+            print(f"      error: {err}")
+    print(f"Total inserted chunks (changed sources): {total_inserted}")
+
+
+def _ping_ollama() -> bool:
+    """Best-effort reachability check for the local Ollama server (never raises)."""
+    import urllib.request
+
+    url = f"{get_llm_base_url()}/api/tags"
+    timeout = min(get_llm_timeout(), 2.0)
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - localhost only
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
+
+
+def doctor_cmd(as_json: bool = False) -> None:
+    """Read-only health check: DB, installed extras, Ollama reachability, models, connectors, memory."""
+    from crossmodalrag.capabilities import has_ocr, has_pdf
+    from crossmodalrag.memory.integrity import memory_stats
+
+    db_path = get_db_path()
+    db_exists = db_path.exists()
+    provider = get_default_provider()
+    embed_model = provider.name if provider is not None else None
+
+    stats = None
+    if db_exists:
+        conn = connect(db_path)
+        try:
+            init_db(conn)
+            stats = memory_stats(conn)
+        finally:
+            conn.close()
+
+    report = {
+        "db": {
+            "path": str(db_path),
+            "exists": db_exists,
+            "size_bytes": (db_path.stat().st_size if db_exists else 0),
+        },
+        "extras": {"embeddings": provider is not None, "pdf": has_pdf(), "ocr": has_ocr()},
+        "ollama": {"base_url": get_llm_base_url(), "reachable": _ping_ollama()},
+        "models": {"embed": embed_model, "llm": get_llm_model(), "extract": get_extract_model()},
+        "config": {
+            "path": (str(get_config_path()) if get_config_path() is not None else None),
+            "loaded": bool(load_config()),
+        },
+        "connectors": {name: len(get_connector_paths(name)) for name, _ in _SYNC_CONNECTORS},
+        "memory": stats,
+    }
+
+    if as_json:
+        print(json.dumps(report, indent=2))
+        return
+
+    print(f"CrossModalRAG doctor — DB: {db_path}")
+    print(f"  DB exists: {db_exists} ({report['db']['size_bytes']} bytes)")
+    ex = report["extras"]
+    print(f"  Extras: embeddings={ex['embeddings']} pdf={ex['pdf']} ocr={ex['ocr']}")
+    print(f"  Ollama: reachable={report['ollama']['reachable']} ({report['ollama']['base_url']})")
+    m = report["models"]
+    print(f"  Models: embed={m['embed']} llm={m['llm']} extract={m['extract']}")
+    cfg = report["config"]
+    print(f"  Config file: {cfg['path'] or '(none)'} (loaded={cfg['loaded']})")
+    print("  Connectors (effective paths): " + ", ".join(
+        f"{name}={count}" for name, count in report["connectors"].items()))
+    if stats is not None:
+        integ = stats["integrity"]
+        print(
+            f"  Memory: nodes={stats['total_nodes']} embeddings={stats['node_embeddings']} "
+            f"distilled={stats['distilled_nodes']} drift={stats['drift_snapshots']} | "
+            f"integrity: unsupported={integ['unsupported_count']} dangling={integ['dangling_count']}"
+        )
+    else:
+        print("  Memory: no database yet (run `mem init-db` / `mem sync`).")
+
+
+def backup_cmd(dest: Path | None = None) -> None:
+    """Write a consistent single-file copy of the local DB (uses SQLite's online backup, WAL-safe)."""
+    from datetime import datetime
+
+    db_path = get_db_path()
+    if not db_path.exists():
+        raise CLIError(f"No database to back up at {db_path}.")
+    if dest is None:
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest = db_path.with_name(f"{db_path.name}.backup-{ts}")
+    dest = dest.expanduser().resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    src = sqlite3.connect(db_path)
+    try:
+        out = sqlite3.connect(dest)
+        try:
+            src.backup(out)  # checkpoints WAL into a complete single file
+        finally:
+            out.close()
+    finally:
+        src.close()
+    print(f"Backed up {db_path} -> {dest} ({dest.stat().st_size} bytes)")
+
+
+def restore_cmd(src: Path, force: bool = False) -> None:
+    """Replace the local DB with a backup. Destructive: requires --force to overwrite an existing DB."""
+    import shutil
+
+    src = src.expanduser().resolve()
+    if not src.exists():
+        raise CLIError(f"Backup file not found: {src}")
+    # Validate it's actually a SQLite database before clobbering anything.
+    try:
+        probe = sqlite3.connect(src)
+        try:
+            probe.execute("PRAGMA schema_version").fetchone()
+        finally:
+            probe.close()
+    except sqlite3.Error:
+        raise CLIError(f"Not a valid SQLite database: {src}")
+
+    db_path = get_db_path()
+    if db_path.exists() and not force:
+        raise CLIError(
+            f"Refusing to overwrite the existing database at {db_path}. Re-run with --force to confirm."
+        )
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    # Drop stale WAL/SHM sidecars so they can't shadow the restored file.
+    for suffix in ("-wal", "-shm"):
+        side = db_path.with_name(db_path.name + suffix)
+        if side.exists():
+            side.unlink()
+    shutil.copy2(src, db_path)
+    print(f"Restored {db_path} from {src} ({db_path.stat().st_size} bytes)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CrossModalRAG local memory CLI.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db", help="Initialize SQLite database schema.")
+
+    p_sync = sub.add_parser(
+        "sync",
+        help="Incrementally (re-)ingest every connector configured in .env (notes/git/pdf/image). "
+        "Idempotent: only changed sources are re-chunked.",
+    )
+    p_sync.add_argument("--max-commits", type=int, default=300, help="Max commits per repo (git).")
+    p_sync.add_argument(
+        "--only",
+        choices=["notes", "git", "pdf", "image"],
+        action="append",
+        default=None,
+        help="Restrict sync to one or more connectors (repeatable).",
+    )
+    p_sync.add_argument("--json", dest="as_json", action="store_true", help="Emit a sync summary as JSON.")
+
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="Read-only health check: DB, installed extras, Ollama reachability, models, connectors, memory.",
+    )
+    p_doctor.add_argument("--json", dest="as_json", action="store_true", help="Emit the report as JSON.")
+
+    p_backup = sub.add_parser(
+        "backup", help="Write a consistent single-file copy of the local database (WAL-safe)."
+    )
+    p_backup.add_argument(
+        "dest", type=Path, nargs="?", default=None,
+        help="Backup destination (default: alongside the DB with a timestamp suffix).",
+    )
+
+    p_restore = sub.add_parser(
+        "restore", help="Replace the local database with a backup file (destructive; needs --force)."
+    )
+    p_restore.add_argument("src", type=Path, help="Backup file to restore from.")
+    p_restore.add_argument(
+        "--force", action="store_true", help="Overwrite the existing database (required when one exists).",
+    )
 
     p_notes = sub.add_parser(
         "ingest-notes",
@@ -927,7 +1204,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ask = sub.add_parser("ask", help="Query indexed evidence.")
     p_ask.add_argument("query", type=str)
-    p_ask.add_argument("--top-k", type=int, default=5)
+    p_ask.add_argument("--top-k", type=int, default=get_default_top_k())
     p_ask.add_argument(
         "--level",
         choices=level_choices,
@@ -938,7 +1215,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument(
         "--profile",
         choices=profile_choices,
-        default=DEFAULT_PROFILE,
+        default=get_default_profile(DEFAULT_PROFILE),
         help="Hybrid retrieval profile (vector/lexical/recency blend).",
     )
     p_ask.add_argument(
@@ -990,7 +1267,7 @@ def build_parser() -> argparse.ArgumentParser:
         "eval",
         help="Run retrieval evaluation using queries stored in queries_eval (optionally load from JSON).",
     )
-    p_eval.add_argument("--top-k", type=int, default=5)
+    p_eval.add_argument("--top-k", type=int, default=get_default_top_k())
     p_eval.add_argument(
         "--query-prefix",
         type=str,
@@ -1006,7 +1283,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument(
         "--profile",
         choices=profile_choices,
-        default=DEFAULT_PROFILE,
+        default=get_default_profile(DEFAULT_PROFILE),
         help="Hybrid retrieval profile (vector/lexical/recency blend).",
     )
     p_eval.add_argument(
@@ -1215,17 +1492,53 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class CLIError(Exception):
+    """An expected, user-facing CLI failure: reported as `error: <msg>` with exit code 1 (no traceback)."""
+
+
+# Expected failures are surfaced as a clean message + exit 1 (not a traceback). Argparse usage errors
+# keep argparse's own exit code 2; unexpected bugs still raise so they are visible.
+_EXPECTED_ERRORS = (
+    CLIError,
+    FileNotFoundError,
+    MissingModalityBackend,
+    MissingEmbeddingBackend,
+    LLMUnavailable,
+    sqlite3.Error,
+)
+
+
 def main() -> None:
     load_dotenv()
     parser = build_parser()
     args = parser.parse_args()
+    try:
+        _dispatch(parser, args)
+    except _EXPECTED_ERRORS as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.command == "init-db":
         init_db_cmd()
+        return
+    if args.command == "sync":
+        sync_cmd(max_commits=args.max_commits, only=args.only, as_json=args.as_json)
+        return
+    if args.command == "doctor":
+        doctor_cmd(as_json=args.as_json)
+        return
+    if args.command == "backup":
+        backup_cmd(dest=args.dest)
+        return
+    if args.command == "restore":
+        restore_cmd(src=args.src, force=args.force)
         return
     if args.command == "ingest-notes":
         vault_paths = _resolve_ingest_paths(
             args.vault_paths,
-            env_prefix="OBSIDIAN_VAULT_PATH",
+            connector="notes",
             command_name="ingest-notes",
         )
         if not vault_paths:
@@ -1239,7 +1552,7 @@ def main() -> None:
     if args.command == "ingest-git":
         repo_paths = _resolve_ingest_paths(
             args.repo_paths,
-            env_prefix="REPO_PATH",
+            connector="git",
             command_name="ingest-git",
         )
         if not repo_paths:
@@ -1253,7 +1566,7 @@ def main() -> None:
     if args.command == "ingest-pdf":
         pdf_paths = _resolve_ingest_paths(
             args.pdf_paths,
-            env_prefix="PDF_PATH",
+            connector="pdf",
             command_name="ingest-pdf",
         )
         if not pdf_paths:
@@ -1267,7 +1580,7 @@ def main() -> None:
     if args.command == "ingest-images":
         image_paths = _resolve_ingest_paths(
             args.image_paths,
-            env_prefix="IMAGE_PATH",
+            connector="image",
             command_name="ingest-images",
         )
         if not image_paths:
@@ -1359,18 +1672,19 @@ def main() -> None:
 def _resolve_ingest_paths(
     explicit_paths: list[Path],
     *,
-    env_prefix: str,
+    connector: str,
     command_name: str,
 ) -> list[Path]:
     if explicit_paths:
         return [path.expanduser().resolve() for path in explicit_paths]
-    env_paths = get_numbered_env_paths(env_prefix)
-    if env_paths:
+    # Fall back to configured paths: environment (.env) first, then the config file.
+    paths = get_connector_paths(connector)
+    if paths:
         print(
             f"No explicit paths provided for `{command_name}`. "
-            f"Using {len(env_paths)} path(s) from {env_prefix}_* in local environment."
+            f"Using {len(paths)} configured path(s) (environment / config file)."
         )
-        return env_paths
+        return paths
     return []
 
 

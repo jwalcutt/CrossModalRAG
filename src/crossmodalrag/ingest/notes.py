@@ -16,12 +16,16 @@ def ingest_notes(
     conn: sqlite3.Connection,
     vault_path: Path,
     embedder: EmbeddingProvider | None = None,
+    progress=None,
 ) -> int:
     if not vault_path.exists():
         raise FileNotFoundError(f"Vault path does not exist: {vault_path}")
     inserted_chunks = 0
     md_files = sorted(vault_path.rglob("*.md"))
-    for path in md_files:
+    total = len(md_files)
+    for scanned, path in enumerate(md_files, start=1):
+        if progress is not None:
+            progress(scanned, total)
         text = path.read_text(encoding="utf-8", errors="ignore")
         stat = path.stat()
         source_uri = str(path.resolve())

@@ -25,3 +25,5 @@ htmlcov/
 build/
 dist/
 .env
+# Local config holds personal paths/defaults; the committed template is crossmodalrag.toml.example.
+crossmodalrag.toml

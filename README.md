@@ -265,6 +265,10 @@ checks for measuring no regression.
 ## CLI Commands
 
 - `mem init-db`
+- `mem doctor [--json]` (read-only health check: DB, installed extras, Ollama reachability, active models, config file, configured connectors, memory build/integrity)
+- `mem sync [--max-commits N] [--only notes|git|pdf|image ...] [--json]` (incrementally re-ingest every connector configured in `.env`/the config file; idempotent — only changed sources are re-chunked)
+- `mem backup [<dest>]` (write a consistent single-file copy of the local DB; WAL-safe)
+- `mem restore <src> [--force]` (replace the local DB with a backup; destructive — `--force` required to overwrite an existing DB)
 - `mem seed-sample [--workspace-dir PATH] [--force]`
 - `mem ingest-notes [<vault_path> ...]` (falls back to `.env` `OBSIDIAN_VAULT_PATH_*`)
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
@@ -283,6 +287,47 @@ checks for measuring no regression.
 - `mem memory-stats [--json]` (node/edge counts, integrity, plus distilled-node + drift-snapshot counts)
 - `mem concepts [--top N] [--json]` (L3 concepts by centrality)
 - `mem timeline [--limit N] [--json]` (L2 episodes, oldest first)
+
+### Operations (sync, doctor, progress, exit codes)
+
+- **`mem sync`** re-ingests every connector configured in your `.env` (`OBSIDIAN_VAULT_PATH_*`,
+  `REPO_PATH_*`, `PDF_PATH_*`, `IMAGE_PATH_*`) in one pass. It is **incremental and idempotent**:
+  ingestion fingerprint-skips unchanged sources, so a second run re-chunks only what changed. PDF/image
+  connectors are **skipped with a note** (not an error) when their extra is absent, and a bad path is
+  reported per-connector without aborting the rest of the sync. `--only` restricts to specific
+  connectors; `--json` emits a summary.
+- **`mem doctor`** is a read-only health check — DB path/size, which optional extras are installed,
+  whether Ollama is reachable, the active embed/LLM/extract models, configured connector counts, and
+  memory build + integrity. Use it to diagnose "why is retrieval lexical-only?" or "why did `ask`
+  fall back to the template?".
+- **Progress.** Long operations (`ingest-*`, `sync`, `reindex-embeddings`, `build-memory`) print a
+  progress line to **stderr only when it is an interactive terminal**, so piping or `--json` output is
+  never polluted.
+- **Exit codes.** `0` success; `1` an expected, reported failure (printed as `error: <message>`, no
+  stack trace); `2` a command-line usage error.
+- **Backup / restore.** `mem backup [<dest>]` writes a WAL-safe single-file copy of the DB (default:
+  alongside it with a timestamp). `mem restore <src>` replaces the active DB from a backup; it is
+  **destructive** and refuses to overwrite an existing DB unless you pass `--force`.
+
+### Config file (optional)
+
+Beyond `.env`, an optional **TOML** config file can hold connector paths and retrieval defaults.
+CrossModalRAG looks for `$CMRAG_CONFIG`, else `./crossmodalrag.toml`. Copy `crossmodalrag.toml.example`
+to get started. Resolution precedence is always **CLI flag > environment/`.env` > config file > built-in
+default**, so the config never overrides something you pass explicitly, and the eval baselines (which
+pass an explicit profile) do not move.
+
+```toml
+[connectors]                       # used by `mem sync` / `mem ingest-*` fallback
+notes = ["/path/to/vault"]
+git   = ["/path/to/repo"]
+
+[retrieval]                        # applied when you omit the flag
+profile = "relevant"               # balanced | relevant | recent | usage
+top_k = 5
+```
+
+(Requires Python 3.11+ for the stdlib `tomllib` parser; the core install stays dependency-free.)
 
 ### JSON output contracts
 

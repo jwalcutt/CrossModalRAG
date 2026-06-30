@@ -149,3 +149,72 @@ def get_numbered_env_paths(prefix: str) -> list[Path]:
         indexed.append((int(match.group(1)), Path(value).expanduser().resolve()))
     indexed.sort(key=lambda item: item[0])
     return [path for _, path in indexed]
+
+
+# --- Optional TOML config file (Phase 6) -------------------------------------------------
+# A `crossmodalrag.toml` (or `$CMRAG_CONFIG`) supplies connector paths + retrieval defaults.
+# Precedence is always: explicit CLI flag > environment/.env > config file > built-in default.
+# The file is optional and never required; a missing/malformed file degrades to "{}" silently.
+
+# Connector name -> the numbered env-var prefix it falls back from.
+CONNECTOR_ENV_PREFIX: dict[str, str] = {
+    "notes": "OBSIDIAN_VAULT_PATH",
+    "git": "REPO_PATH",
+    "pdf": "PDF_PATH",
+    "image": "IMAGE_PATH",
+}
+
+
+def get_config_path() -> Path | None:
+    """Resolve the active config file: ``$CMRAG_CONFIG`` if set, else ``./crossmodalrag.toml``.
+
+    Returns the path only when it exists (for `$CMRAG_CONFIG`, the explicit path is returned even if
+    missing so `doctor` can report a misconfiguration); otherwise None.
+    """
+    raw = os.getenv("CMRAG_CONFIG")
+    if raw and raw.strip():
+        return Path(raw).expanduser()
+    default = Path.cwd() / "crossmodalrag.toml"
+    return default if default.exists() else None
+
+
+def load_config() -> dict:
+    """Parse the TOML config file into a dict (``{}`` when absent, unreadable, or malformed)."""
+    path = get_config_path()
+    if path is None or not path.exists():
+        return {}
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - 3.11+ per requires-python
+        return {}
+    try:
+        with open(path, "rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def get_connector_paths(name: str) -> list[Path]:
+    """Resolved ingestion paths for a connector: environment first, else the config file."""
+    env_paths = get_numbered_env_paths(CONNECTOR_ENV_PREFIX[name])
+    if env_paths:
+        return env_paths
+    raw = load_config().get("connectors", {}).get(name, [])
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [Path(str(p)).expanduser().resolve() for p in raw if str(p).strip()]
+
+
+def get_default_profile(builtin: str) -> str:
+    """Default retrieval profile: config `[retrieval].profile` if set, else ``builtin``."""
+    value = load_config().get("retrieval", {}).get("profile")
+    return value if isinstance(value, str) and value.strip() else builtin
+
+
+def get_default_top_k(builtin: int = 5) -> int:
+    """Default retrieval top-k: config `[retrieval].top_k` if a positive int, else ``builtin``."""
+    value = load_config().get("retrieval", {}).get("top_k")
+    return value if isinstance(value, int) and value > 0 else builtin

@@ -21,6 +21,7 @@ def ingest_images(
     conn: sqlite3.Connection,
     image_path: Path,
     embedder: EmbeddingProvider | None = None,
+    progress=None,
 ) -> int:
     """Ingest one image file or a directory of images into L0 ``evidence_chunks``.
 
@@ -37,7 +38,10 @@ def ingest_images(
 
     image_files = _resolve_image_files(image_path)
     inserted_chunks = 0
-    for path in image_files:
+    total = len(image_files)
+    for scanned, path in enumerate(image_files, start=1):
+        if progress is not None:
+            progress(scanned, total)
         inserted_chunks += _ingest_one_image(conn, path, embedder, pytesseract, Image)
     conn.commit()
     return inserted_chunks

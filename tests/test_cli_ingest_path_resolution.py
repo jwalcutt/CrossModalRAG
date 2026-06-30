@@ -65,7 +65,7 @@ def test_main_ingest_notes_uses_local_dotenv_paths_when_no_args(
     cli.main()
 
     out = capsys.readouterr().out
-    assert "Using 2 path(s) from OBSIDIAN_VAULT_PATH_*" in out
+    assert "Using 2 configured path(s)" in out
     assert captured_paths == [
         (tmp_path / "vault-a").resolve(),
         (tmp_path / "vault-b").resolve(),

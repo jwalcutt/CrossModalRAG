@@ -45,6 +45,7 @@ def extract_pending_sources(
     *,
     prompt_version: str = EVENT_PROMPT_VERSION,
     limit: int | None = None,
+    progress=None,
 ) -> ExtractionResult:
     """Extract L1 events for sources whose events are missing or stale.
 
@@ -52,6 +53,7 @@ def extract_pending_sources(
     fingerprint (content + model + prompt_version) differs from what is already
     stored, so re-running on unchanged data is a no-op. ``limit`` caps the number
     of sources *processed* this run (skips do not count), enabling staged passes.
+    ``progress`` (optional ``(done, total) -> None``) is called per source scanned.
     """
     processed = 0
     skipped = 0
@@ -59,7 +61,8 @@ def extract_pending_sources(
     parse_failures = 0
 
     rows = conn.execute("SELECT id FROM sources ORDER BY id ASC").fetchall()
-    for row in rows:
+    total = len(rows)
+    for scanned, row in enumerate(rows, start=1):
         if limit is not None and processed >= limit:
             break
         source_id = int(row["id"])
@@ -67,6 +70,8 @@ def extract_pending_sources(
         fingerprint = _fingerprint(provider.name, prompt_version, text)
         if _is_up_to_date(conn, source_id, fingerprint):
             skipped += 1
+            if progress is not None:
+                progress(scanned, total)
             continue
 
         created, failed = _extract_for_source(
@@ -81,6 +86,8 @@ def extract_pending_sources(
         parse_failures += failed
         processed += 1
         conn.commit()
+        if progress is not None:
+            progress(scanned, total)
 
     return ExtractionResult(
         sources_processed=processed,

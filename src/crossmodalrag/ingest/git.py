@@ -19,6 +19,7 @@ def ingest_git(
     target_author_name: str | None = None,
     target_author_email: str | None = None,
     embedder: EmbeddingProvider | None = None,
+    progress=None,
 ) -> int:
     if not (repo_path / ".git").exists():
         raise FileNotFoundError(f"Not a git repository: {repo_path}")
@@ -27,7 +28,10 @@ def ingest_git(
         target_author_name, target_author_email = _load_target_author()
     rows = _load_commit_rows(repo_path, max_commits=max_commits)
     inserted_chunks = 0
-    for row in rows:
+    total = len(rows)
+    for scanned, row in enumerate(rows, start=1):
+        if progress is not None:
+            progress(scanned, total)
         sha, ts, subject, body, author_name, author_email, patch = row
         source_uri = f"{repo_path.resolve()}@{sha}"
         if author_name != target_author_name or author_email != target_author_email:

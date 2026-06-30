@@ -19,6 +19,7 @@ def ingest_pdf(
     conn: sqlite3.Connection,
     pdf_path: Path,
     embedder: EmbeddingProvider | None = None,
+    progress=None,
 ) -> int:
     """Ingest one PDF file or a directory of PDFs into L0 ``evidence_chunks``.
 
@@ -33,7 +34,10 @@ def ingest_pdf(
 
     pdf_files = _resolve_pdf_files(pdf_path)
     inserted_chunks = 0
-    for path in pdf_files:
+    total = len(pdf_files)
+    for scanned, path in enumerate(pdf_files, start=1):
+        if progress is not None:
+            progress(scanned, total)
         inserted_chunks += _ingest_one_pdf(conn, path, embedder, pypdf)
     conn.commit()
     return inserted_chunks

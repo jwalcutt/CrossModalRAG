@@ -62,12 +62,14 @@ def embed_pending_chunks(
     conn: sqlite3.Connection,
     provider: "EmbeddingProvider",
     batch_size: int = 64,
+    progress=None,
 ) -> int:
     """Embed chunks that have no vector for ``provider.name`` (or a stale model).
 
     Idempotent and resumable: only chunks missing a current-model embedding are
     processed, so re-running after an interruption continues where it left off.
-    Returns the number of chunks embedded.
+    Returns the number of chunks embedded. ``progress`` (optional ``(done, total) -> None``)
+    is called after each batch.
     """
     rows = conn.execute(
         """
@@ -80,8 +82,9 @@ def embed_pending_chunks(
         (provider.name,),
     ).fetchall()
 
+    total = len(rows)
     embedded = 0
-    for start in range(0, len(rows), batch_size):
+    for start in range(0, total, batch_size):
         batch = rows[start : start + batch_size]
         texts = [str(row["chunk_text"]) for row in batch]
         vectors = provider.embed(texts)
@@ -95,6 +98,8 @@ def embed_pending_chunks(
             )
             embedded += 1
         conn.commit()
+        if progress is not None:
+            progress(min(start + batch_size, total), total)
     return embedded
 
 
@@ -136,11 +141,13 @@ def embed_pending_nodes(
     level: int,
     node_type: str,
     batch_size: int = 64,
+    progress=None,
 ) -> int:
     """Embed memory_nodes (title + content) lacking a current-model vector.
 
     Mirrors ``embed_pending_chunks``: resumable and model-aware. Returns the
-    number of nodes embedded this run.
+    number of nodes embedded this run. ``progress`` (optional ``(done, total) -> None``)
+    is called after each batch.
     """
     rows = conn.execute(
         """
@@ -153,8 +160,9 @@ def embed_pending_nodes(
         (level, node_type, provider.name),
     ).fetchall()
 
+    total = len(rows)
     embedded = 0
-    for start in range(0, len(rows), batch_size):
+    for start in range(0, total, batch_size):
         batch = rows[start : start + batch_size]
         texts = [_node_text(row) for row in batch]
         vectors = provider.embed(texts)
@@ -168,6 +176,8 @@ def embed_pending_nodes(
             )
             embedded += 1
         conn.commit()
+        if progress is not None:
+            progress(min(start + batch_size, total), total)
     return embedded
 
 
