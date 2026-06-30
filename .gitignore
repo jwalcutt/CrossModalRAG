@@ -27,3 +27,7 @@ dist/
 .env
 # Local config holds personal paths/defaults; the committed template is crossmodalrag.toml.example.
 crossmodalrag.toml
+# Web UI build deps (the built bundle in src/crossmodalrag/api/static IS committed).
+web/node_modules/
+web/dist/
+*.tsbuildinfo

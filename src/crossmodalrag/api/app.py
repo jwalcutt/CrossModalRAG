@@ -9,6 +9,11 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
+
+# Built web UI (Phase 6 step 4), produced by `web/` (Vite) and committed here. Served at the API
+# root when present; the API routes above take precedence over the SPA's static mount.
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 class MissingUIBackend(RuntimeError):
@@ -160,5 +165,12 @@ def create_app():
             "by_type": {r["event_type"]: int(r["n"]) for r in by_type},
             "top_targets": [usage_summary_to_dict(s) for s in top_targets],
         }
+
+    # Serve the built web UI at the root (vendored, no external calls). Mounted LAST so the JSON API
+    # routes above win; absent when the UI hasn't been built (the API still works headless).
+    if STATIC_DIR.is_dir():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
 
     return app

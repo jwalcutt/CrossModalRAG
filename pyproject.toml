@@ -31,3 +31,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship the built web UI (served by `mem serve` with the [ui] extra).
+"crossmodalrag.api" = ["static/**/*"]

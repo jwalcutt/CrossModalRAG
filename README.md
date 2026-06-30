@@ -269,7 +269,7 @@ checks for measuring no regression.
 - `mem sync [--max-commits N] [--only notes|git|pdf|image ...] [--json]` (incrementally re-ingest every connector configured in `.env`/the config file; idempotent — only changed sources are re-chunked)
 - `mem backup [<dest>]` (write a consistent single-file copy of the local DB; WAL-safe)
 - `mem restore <src> [--force]` (replace the local DB with a backup; destructive — `--force` required to overwrite an existing DB)
-- `mem serve [--host 127.0.0.1] [--port 8765]` (local read-only HTTP API serving the JSON contracts; requires the `[ui]` extra; localhost-only by default)
+- `mem serve [--host 127.0.0.1] [--port 8765]` (local web console + read-only HTTP API serving the JSON contracts; requires the `[ui]` extra; localhost-only by default)
 - `mem seed-sample [--workspace-dir PATH] [--force]`
 - `mem ingest-notes [<vault_path> ...]` (falls back to `.env` `OBSIDIAN_VAULT_PATH_*`)
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
@@ -341,24 +341,34 @@ evidence ids + L0 locators) so a consumer can drill back down to the source. The
 library (the `*_to_dict` / `list_*` / `memory_stats` helpers) and pinned by `tests/test_json_contracts.py`,
 so the CLI and any future API/UI render exactly the same payloads.
 
-### Local API (`mem serve`)
+### Web UI &amp; local API (`mem serve`)
 
-The same JSON contracts are available over a **local, read-only HTTP API** — the boundary a web UI or
-an Obsidian plugin can call without re-implementing retrieval. It requires the opt-in `[ui]` extra
-(`pip install -e ".[ui]"`, adds FastAPI + uvicorn) and **binds `127.0.0.1` by default** (no auth on
-loopback; nothing leaves the machine). Without the extra, `mem serve` exits with an install hint.
+`mem serve` runs a **local, read-only HTTP API** *and* serves a **web console** (a memory dashboard:
+ask with claim → exact-evidence drill-down, browse concepts, timeline, concept-drift movement, and
+forgetting/recall). It requires the opt-in `[ui]` extra (`pip install -e ".[ui]"`, adds FastAPI +
+uvicorn) and **binds `127.0.0.1` by default** — no auth on loopback, nothing leaves the machine, all
+assets (including fonts) vendored. Without the extra, `mem serve` exits with an install hint.
 
 ```bash
 pip install -e ".[ui]"
-mem serve                       # http://127.0.0.1:8765  (use --host/--port to change; Ctrl-C to stop)
+mem serve                       # web UI + API at http://127.0.0.1:8765  (Ctrl-C to stop)
+# then open http://127.0.0.1:8765 in a browser
+```
+
+The API routes are **GET, read-only** (no writes; `/ask` does not record usage): `/health`, `/ask`,
+`/concepts`, `/timeline`, `/memory-stats`, `/forgetting`, `/recall`, `/drift`, `/distill`, `/usage` —
+each returns exactly the corresponding `--json` payload. The web console is served at `/`; interactive
+API docs are at `/docs`. Use `--host`/`--port` to change the bind; binding to a non-loopback `--host`
+exposes the unauthenticated API on your network and is warned against.
+
+```bash
 curl -s localhost:8765/health
 curl -s "localhost:8765/ask?q=why+did+I+change+the+parser&use_llm=true"
 ```
 
-All routes are **GET, read-only** (no writes; `/ask` does not record usage): `/health`, `/ask`,
-`/concepts`, `/timeline`, `/memory-stats`, `/forgetting`, `/recall`, `/drift`, `/distill`, `/usage` —
-each returns exactly the corresponding `--json` payload. Interactive docs are at `/docs`. Binding to a
-non-loopback `--host` exposes the unauthenticated API on your network and is warned against.
+The web console is a React app under `web/`, built to `src/crossmodalrag/api/static/` (committed, so
+`mem serve` needs no Node). To develop it: `cd web && npm install && npm run dev` (proxies to a running
+`mem serve`); `npm run build` refreshes the shipped bundle. See `web/README.md`.
 
 ## Hierarchical Memory (experimental)
 

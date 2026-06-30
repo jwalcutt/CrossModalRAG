@@ -124,6 +124,18 @@ def test_routes_are_get_only(client):
     assert client.post("/concepts").status_code == 405  # read-only API
 
 
+def test_web_ui_served_at_root_when_built(client):
+    from crossmodalrag.api.app import STATIC_DIR
+
+    if not STATIC_DIR.is_dir():
+        pytest.skip("web UI not built (run `cd web && npm run build`)")
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    # The SPA mount must not shadow the JSON API.
+    assert client.get("/memory-stats").status_code == 200
+
+
 # --- thin-client guarantee: API payload == CLI --json payload -----------------
 
 
