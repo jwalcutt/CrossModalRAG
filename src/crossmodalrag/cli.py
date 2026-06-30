@@ -442,6 +442,7 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
     build_eps = level in ("episode", "all")
     build_concept = level in ("concept", "all")
     build_graph_layer = level in ("graph", "all")
+    build_drift_layer = level in ("drift", "all")
     db_path = get_db_path()
     conn = connect(db_path)
     try:
@@ -493,6 +494,21 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
             print(f"  Concept co-occurrence edges: {graph.relates_edges_created} "
                   f"(replaced {graph.relates_edges_deleted})")
             print(f"  Nodes scored (centrality): {graph.nodes_scored}")
+
+        if build_drift_layer:
+            embed_provider = get_default_provider()
+            if embed_provider is None:
+                raise SystemExit(
+                    "Concept drift requires the embeddings extra. Run: pip install -e \".[embeddings]\""
+                )
+            from crossmodalrag.memory.drift import build_drift
+
+            drift = build_drift(conn, embed_provider)
+            print(f"Concept drift | embed: {embed_provider.name}")
+            print(f"  Concepts analyzed: {drift.concepts_analyzed}")
+            print(f"  Snapshots created: {drift.snapshots_created}")
+            print(f"  Snapshots kept (up to date): {drift.snapshots_kept}")
+            print(f"  Snapshots deleted (stale): {drift.snapshots_deleted}")
     finally:
         conn.close()
     print("Run `mem memory-stats` to inspect node/edge counts and integrity.")
@@ -619,6 +635,37 @@ def forgetting_cmd(level: str = "concept", top: int = 10, min_support: int = 1) 
         )
         if item.evidence_source_uris:
             print(f"      evidence: {', '.join(item.evidence_source_uris)}")
+
+
+def drift_cmd(top: int = 10, min_support: int = 1) -> None:
+    from crossmodalrag.memory.drift import concept_drift_summaries
+
+    db_path = get_db_path()
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        items = concept_drift_summaries(conn, top=top, min_support=min_support)
+    finally:
+        conn.close()
+
+    print(f"Concept drift — DB: {db_path}")
+    if not items:
+        print(
+            "No drift snapshots found. Run `mem build-memory` (or `mem build-memory --level drift`) "
+            "first; concept drift needs the embeddings extra."
+        )
+        return
+    print("How your concepts have moved across time windows (highest drift first):")
+    for item in items:
+        title = item.title or "untitled"
+        tags = " [relearning]" if item.relearning else ""
+        print(
+            f"  [drift={item.overall_drift:.3f}] concept #{item.concept_id}: {title}{tags}\n"
+            f"      windows={item.window_count} support={item.support} "
+            f"confidence={item.confidence:.3f} span={item.span_start[:10]}..{item.span_end[:10]}"
+        )
+        if item.evidence_source_uri:
+            print(f"      evidence: {item.evidence_source_uri}")
 
 
 def recall_cmd(level: str = "concept", top: int = 10, min_support: int = 1, regenerate: bool = False) -> None:
@@ -937,11 +984,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_build.add_argument(
         "--level",
-        choices=["event", "episode", "concept", "graph", "all"],
+        choices=["event", "episode", "concept", "graph", "drift", "all"],
         default="all",
         help="Memory level to build: 'event' (LLM), 'episode' (no LLM), "
         "'concept' (embeddings extra; LLM naming optional), 'graph' (no LLM/embeddings), "
-        "or 'all' (default).",
+        "'drift' (concept drift over time windows; embeddings extra, no LLM), or 'all' (default).",
     )
     p_build.add_argument(
         "--limit",
@@ -990,6 +1037,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Minimum grounded L0 chunks for a node to be considered.",
+    )
+
+    p_drift = sub.add_parser(
+        "drift",
+        help="Show how L3 concepts have moved across time windows (concept drift). Read-only; "
+        "run `mem build-memory --level drift` first.",
+    )
+    p_drift.add_argument("--top", type=int, default=10)
+    p_drift.add_argument(
+        "--min-support",
+        type=int,
+        default=1,
+        help="Minimum total member events (across windows) for a concept to be shown.",
     )
 
     p_recall = sub.add_parser(
@@ -1159,6 +1219,9 @@ def main() -> None:
         return
     if args.command == "forgetting":
         forgetting_cmd(level=args.level, top=args.top, min_support=args.min_support)
+        return
+    if args.command == "drift":
+        drift_cmd(top=args.top, min_support=args.min_support)
         return
     if args.command == "recall":
         recall_cmd(

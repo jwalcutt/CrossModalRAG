@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,9 @@ def ingest_notes(
         text = path.read_text(encoding="utf-8", errors="ignore")
         stat = path.stat()
         source_uri = str(path.resolve())
-        timestamp = _iso_mtime(stat.st_mtime)
+        # Prefer an explicit, content-declared date (deterministic across machines/checkouts and
+        # useful for time-aware layers like drift); fall back to file mtime when absent.
+        timestamp = _parse_note_date(text) or _iso_mtime(stat.st_mtime)
         source_fingerprint = _source_fingerprint(text)
         metadata_json = json.dumps({"bytes": stat.st_size, "fingerprint": source_fingerprint})
         source_id, unchanged = _upsert_note_source(
@@ -58,6 +61,55 @@ def ingest_notes(
 
 def _iso_mtime(mtime: float) -> str:
     return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+
+
+# A YAML-frontmatter `date:`/`created:` value (Obsidian-style) or a leading `Date:` line, taken as
+# the note's authoritative timestamp. Date-only values are normalized to midnight UTC. Kept tolerant:
+# any unrecognized/malformed value yields None so ingestion falls back to mtime.
+_FRONTMATTER_RE = re.compile(r"\A﻿?---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
+_FRONTMATTER_DATE_RE = re.compile(r"^(?:date|created)\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_BODY_DATE_RE = re.compile(r"^Date\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_HEAD_LINES = 12  # only scan near the top of the body for a `Date:` line
+
+
+def _parse_note_date(text: str) -> str | None:
+    """Extract an explicit note date (frontmatter `date:`/`created:` or a leading `Date:` line).
+
+    Returns a normalized ISO-8601 UTC timestamp, or None when no parseable date is present.
+    """
+    raw: str | None = None
+    frontmatter = _FRONTMATTER_RE.match(text)
+    if frontmatter:
+        match = _FRONTMATTER_DATE_RE.search(frontmatter.group(1))
+        if match:
+            raw = match.group(1)
+    if raw is None:
+        # Scan only the first few non-frontmatter lines for a `Date:` line.
+        body = text[frontmatter.end():] if frontmatter else text
+        head = "\n".join(body.splitlines()[:_HEAD_LINES])
+        match = _BODY_DATE_RE.search(head)
+        if match:
+            raw = match.group(1)
+    if raw is None:
+        return None
+    return _normalize_date(raw)
+
+
+def _normalize_date(raw: str) -> str | None:
+    value = raw.strip().strip('"').strip("'").strip()
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        # Date-only fallback (YYYY-MM-DD) when the full ISO parse fails on a bare date.
+        try:
+            dt = datetime.strptime(value[:10], "%Y-%m-%d")
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _source_fingerprint(text: str) -> str:

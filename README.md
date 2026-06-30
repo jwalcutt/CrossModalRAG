@@ -196,6 +196,13 @@ Requires [Ollama](https://ollama.com) running locally with a model pulled
   when the underlying memory changes, or with `--regenerate`); if Ollama is unavailable it falls back
   to a deterministic template question + an evidence excerpt, so it never fails. Each card cites its
   evidence. `--level all` covers events/episodes/concepts.
+- **Concept drift** (`mem drift`): shows how your L3 concepts have **moved over time** — for each
+  concept, its member events are bucketed into time windows (`CMRAG_DRIFT_WINDOW_DAYS`, default 30),
+  a per-window prototype (centroid) is computed, and the drift between consecutive windows is scored
+  as `1 − cosine`. Concepts re-engaged after an empty window are flagged as **relearning**. Each item
+  shows window count, span, support, confidence, and a grounding URI. Build the snapshots first with
+  `mem build-memory --level drift` (deterministic, no LLM; needs the `[embeddings]` extra); `mem drift`
+  is a read-only view. Note timestamps drive the windows — see "date-aware note dates" below.
 - `--level` chooses the retrieval level: `evidence` (default, L0 chunks) or a memory level
   (`event`/`episode`/`concept`). At a memory level, `ask` retrieves the matching nodes, prints them,
   then drills them down to their L0 evidence and answers grounded in (and citing) that L0 — so
@@ -259,10 +266,11 @@ checks for measuring no regression.
 - `mem usage [--clear] [--top N]` (local usage-tracking stats; `--clear` wipes the history)
 - `mem forgetting [--level concept|episode|event|all] [--top N] [--min-support N]` ("what am I likely forgetting?" — important-but-stale memories, grounded to evidence)
 - `mem recall [--level concept|episode|event|all] [--top N] [--min-support N] [--regenerate]` (grounded active-recall study cards for the highest forgetting-risk memories)
+- `mem drift [--top N] [--min-support N]` (concept drift over time windows; read-only — run `mem build-memory --level drift` first, needs the `[embeddings]` extra)
 - `mem eval [--top-k N] [--query-prefix PREFIX] [--load-queries PATH.json] [--profile ...] [--level ...] [--modality text|code|pdf|image ...]`
 - `mem eval-generation [--top-k N] [--query-prefix PREFIX] [--profile ...] [--level evidence|event|episode|concept] [--model ID]` (requires Ollama)
 - `mem reindex-embeddings [--batch-size N] [--model ID]` (requires the `[embeddings]` extra)
-- `mem build-memory [--level event|episode|concept|graph|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts need the `[embeddings]` extra; graph needs neither)
+- `mem build-memory [--level event|episode|concept|graph|drift|all] [--limit N] [--model ID]` (events/concept-naming use Ollama; concepts + drift need the `[embeddings]` extra; episode/graph need neither)
 - `mem memory-stats`
 - `mem concepts [--top N]` (L3 concepts by centrality)
 - `mem timeline [--limit N]` (L2 episodes, oldest first)
@@ -290,17 +298,26 @@ grouping**, and **L3 concept clustering**. `mem build-memory` derives all three:
 - **Graph** (no LLM/embeddings): computes PageRank **centrality** per node (an importance signal
   stored on each node) and **concept co-occurrence** links — two concepts get a `relates_to` edge
   (weighted by shared-episode count) when they have events in the same episode.
+- **Drift** (no LLM; needs the `[embeddings]` extra): buckets each concept's member events into
+  time windows and scores how the concept's prototype (centroid) **moved** between windows; surfaced
+  via `mem drift`. See the `mem drift` bullet above.
 
 Every higher-level node drills down to its L0 evidence through its members.
 
 ```bash
-mem build-memory --limit 50          # L1 events (up to 50 sources) + L2 episodes + L3 concepts + graph
+mem build-memory --limit 50          # L1 events (up to 50 sources) + L2 episodes + L3 concepts + graph + drift
 mem build-memory --level event       # only L1 events (LLM)
 mem build-memory --level episode     # only L2 episodes (no Ollama needed)
 mem build-memory --level concept     # only L3 concepts (needs the embeddings extra; run reindex-embeddings first)
 mem build-memory --level graph       # only centrality + concept co-occurrence (no LLM/embeddings)
+mem build-memory --level drift       # only concept-drift snapshots (needs the embeddings extra; build concepts first)
 mem memory-stats                     # node/edge counts, co-occurrence edges, top central nodes, integrity
 ```
+
+**Date-aware note dates.** A note's timestamp drives time-aware layers (episodes, drift). If a note
+declares an explicit date — YAML frontmatter `date:`/`created:`, or a leading `Date: YYYY-MM-DD` line
+near the top — that date is used as its timestamp; otherwise the file's modification time is used.
+This keeps windowing deterministic across machines and checkouts.
 
 Once built and embedded (`mem reindex-embeddings` now also embeds memory nodes), the hierarchy is
 queryable: `mem ask --level concept|episode|event` retrieves at that level and answers grounded in
