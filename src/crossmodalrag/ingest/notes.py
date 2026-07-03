@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from crossmodalrag.chunking import chunk_markdown
+from crossmodalrag.chunking import CHUNKER_VERSION, chunk_markdown
 from crossmodalrag.embed.provider import EmbeddingProvider
 from crossmodalrag.ingest._embed import embed_source_chunks, purge_source_embeddings
 
@@ -48,7 +48,7 @@ def ingest_notes(
         purge_source_embeddings(conn, source_id)
         conn.execute("DELETE FROM evidence_chunks WHERE source_id = ?", (source_id,))
         new_chunks: list[tuple[int, str]] = []
-        for idx, chunk in enumerate(chunk_markdown(text)):
+        for idx, chunk in enumerate(chunk_markdown(text, title=path.stem)):
             cur = conn.execute(
                 """
                 INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text, metadata_json)
@@ -117,7 +117,13 @@ def _normalize_date(raw: str) -> str | None:
 
 
 def _source_fingerprint(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # Fold the chunker version into the fingerprint so a chunker upgrade re-chunks
+    # intentionally on the next ingest, while unchanged input never churns.
+    hasher = hashlib.sha256()
+    hasher.update(CHUNKER_VERSION.encode("utf-8"))
+    hasher.update(b"\x1f")
+    hasher.update(text.encode("utf-8"))
+    return hasher.hexdigest()
 
 
 def _upsert_note_source(

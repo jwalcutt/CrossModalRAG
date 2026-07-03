@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from crossmodalrag.capabilities import require_pdf
-from crossmodalrag.chunking import chunk_text
+from crossmodalrag.chunking import CHUNKER_VERSION, chunk_text
 from crossmodalrag.embed.provider import EmbeddingProvider
 from crossmodalrag.ingest._embed import embed_source_chunks, purge_source_embeddings
 from crossmodalrag.modality import MODALITY_PDF_PAGE, build_chunk_metadata
@@ -158,12 +158,15 @@ def _iso_mtime(mtime: float) -> str:
 
 
 def _source_fingerprint(file_bytes: bytes) -> str:
-    # Fold the extractor identity + version into the fingerprint so an extractor
-    # upgrade re-derives intentionally, while unchanged input never churns.
+    # Fold the extractor identity + version and the chunker version into the
+    # fingerprint so an extractor or chunker upgrade re-derives intentionally,
+    # while unchanged input never churns.
     hasher = hashlib.sha256()
     hasher.update(_extractor_id().encode("utf-8"))
     hasher.update(b"\x1f")
     hasher.update(_extractor_version().encode("utf-8"))
+    hasher.update(b"\x1f")
+    hasher.update(CHUNKER_VERSION.encode("utf-8"))
     hasher.update(b"\x1f")
     hasher.update(file_bytes)
     return hasher.hexdigest()

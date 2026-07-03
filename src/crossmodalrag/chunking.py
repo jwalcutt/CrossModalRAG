@@ -6,55 +6,83 @@ from typing import Iterable
 
 HEADER_RE = re.compile(r"^#{1,6}\s")
 
+# Version of the chunking logic, folded into source fingerprints by every ingester.
+# Bump it whenever chunk boundaries or chunk text composition change, so the
+# fingerprint-skip is invalidated and the next ingest re-chunks existing sources
+# deterministically (same content + same version always yields identical chunks).
+# "2": boundary-aware splitting (no mid-word cuts) + title/heading-path context line.
+CHUNKER_VERSION = "2"
+
+_SENTENCE_END = ".!?"
+
 
 def chunk_text(text: str, max_chars: int = 900, overlap: int = 120) -> list[str]:
-    """Fixed-character chunking with overlap.
+    """Overlapping chunking that splits on sentence/whitespace boundaries.
 
     Used directly for unstructured text and as the fallback splitter for
     oversized sections/hunks produced by the structure-aware chunkers below.
+    Each split point prefers, in order: a sentence end, any whitespace, and only
+    hard-cuts mid-token when the text has no whitespace at all (e.g. a giant
+    identifier blob). Chunk starts are aligned to word boundaries so no chunk
+    begins mid-word.
     """
     cleaned = text.strip()
     if not cleaned:
         return []
     if len(cleaned) <= max_chars:
         return [cleaned]
+    n = len(cleaned)
+    overlap = max(0, min(overlap, max_chars - 1))
     chunks: list[str] = []
     start = 0
-    while start < len(cleaned):
-        end = min(start + max_chars, len(cleaned))
-        chunks.append(cleaned[start:end])
-        if end == len(cleaned):
+    while start < n:
+        hard_end = min(start + max_chars, n)
+        end = hard_end if hard_end == n else _split_point(cleaned, start, hard_end)
+        piece = cleaned[start:end].strip()
+        if piece:
+            chunks.append(piece)
+        if end >= n:
             break
-        start = max(0, end - overlap)
+        start = _overlap_start(cleaned, start, end, overlap)
     return chunks
 
 
-def chunk_markdown(text: str, max_chars: int = 900, overlap: int = 120) -> list[str]:
-    """Markdown header-aware chunking.
+def chunk_markdown(
+    text: str,
+    max_chars: int = 900,
+    overlap: int = 120,
+    title: str | None = None,
+) -> list[str]:
+    """Markdown header- and paragraph-aware chunking with a context breadcrumb.
 
-    Splits text into sections delimited by ATX headers (`#`..`######`) so each
-    chunk stays within a single logical section. Sections that exceed
-    ``max_chars`` fall back to overlapping character chunks, with the section
-    header prepended to continuation chunks to preserve context.
+    Splits text into sections delimited by ATX headers (`#`..`######`), then
+    into paragraphs (blank-line separated blocks), so each chunk is one
+    self-contained semantic unit — a definition, a list, a formula block —
+    rather than a fixed-size window mixing neighbours. A section's header line
+    stays attached to its first paragraph; paragraphs longer than ``max_chars``
+    fall back to boundary-aware overlapping chunks (``chunk_text``). Every
+    chunk is prefixed with a single context line — ``title > heading >
+    subheading`` — built from the source ``title`` (when given) and the
+    section's full heading path, so a chunk's subject is present in its
+    indexed/embedded text even when the body (formulas, tables) carries few
+    usable terms. The context line is additive on top of ``max_chars``.
     """
     cleaned = text.strip()
     if not cleaned:
         return []
 
     chunks: list[str] = []
-    for header, section in _split_markdown_sections(cleaned):
+    for heading_path, section in _split_markdown_sections(cleaned):
         section_text = section.strip()
         if not section_text:
             continue
-        if len(section_text) <= max_chars:
-            chunks.append(section_text)
-            continue
-        sub_chunks = chunk_text(section_text, max_chars=max_chars, overlap=overlap)
-        for idx, sub in enumerate(sub_chunks):
-            if idx == 0 or not header:
-                chunks.append(sub)
-            else:
-                chunks.append(f"{header}\n{sub}")
+        context = _context_line(title, heading_path)
+        for para in _split_paragraphs(section_text):
+            pieces = [para] if len(para) <= max_chars else chunk_text(
+                para, max_chars=max_chars, overlap=overlap
+            )
+            for sub in pieces:
+                chunks.append(f"{context}\n\n{sub}" if context else sub)
     return chunks
 
 
@@ -82,26 +110,113 @@ def chunk_diff(text: str, max_chars: int = 1400, overlap: int = 180) -> list[str
     return chunks
 
 
-def _split_markdown_sections(text: str) -> Iterable[tuple[str | None, str]]:
-    """Yield (header_line, section_text) pairs.
+def _split_point(text: str, start: int, hard_end: int) -> int:
+    """Best split position in ``(floor, hard_end]``.
 
-    The section_text includes its own header line. Content before the first
-    header is yielded with a ``None`` header.
+    Prefers, in order: the last paragraph break, the last sentence end, the
+    last line break, the last whitespace — falling back to ``hard_end``
+    (mid-token) only when the window has none of these. Paragraph breaks rank
+    above sentence ends because notes are often period-light markdown (bullet
+    lists, formulas) where the blank line is the only real semantic boundary.
+    The floor is the window midpoint so boundary-seeking never produces
+    degenerate tiny chunks.
     """
-    sections: list[tuple[str | None, str]] = []
-    current_header: str | None = None
+    floor = start + (hard_end - start) // 2
+    para = text.rfind("\n\n", floor + 1, hard_end)
+    if para != -1:
+        return para
+    for i in range(hard_end - 1, floor, -1):
+        if text[i].isspace() and text[i - 1] in _SENTENCE_END:
+            return i
+    newline = text.rfind("\n", floor + 1, hard_end)
+    if newline != -1:
+        return newline
+    for i in range(hard_end - 1, floor, -1):
+        if text[i].isspace():
+            return i
+    return hard_end
+
+
+def _overlap_start(text: str, start: int, end: int, overlap: int) -> int:
+    """Start of the next chunk: ``end - overlap`` aligned to a line or word start.
+
+    A nearby line start is preferred (list items / paragraphs resume cleanly),
+    but only within ``overlap`` extra characters so a single soft-wrapped mega-
+    line cannot balloon the overlap; otherwise the offset widens to the
+    enclosing word so chunk starts stay off mid-word positions. When the region
+    has no whitespace at all (hard-cut regime), the raw offset is kept so
+    progress is unaffected.
+    """
+    next_start = end - overlap
+    if next_start <= start:
+        next_start = end
+    newline = text.rfind("\n", start, next_start)
+    if newline != -1 and next_start - (newline + 1) <= max(overlap, 1):
+        aligned = newline + 1
+    else:
+        aligned = next_start
+        while aligned > start + 1 and not text[aligned - 1].isspace():
+            aligned -= 1
+        if aligned <= start + 1 and not text[aligned - 1].isspace():
+            aligned = next_start  # no word boundary in range: keep the raw overlap
+    while aligned < len(text) and text[aligned].isspace():
+        aligned += 1
+    return aligned if aligned > start else end
+
+
+_PARAGRAPH_RE = re.compile(r"\n\s*\n")
+
+
+def _split_paragraphs(section_text: str) -> list[str]:
+    """Split a section into blank-line separated paragraphs.
+
+    A paragraph that is just the section's header line is merged into the next
+    paragraph (a bare ``## Heading`` chunk carries no evidence on its own).
+    """
+    paragraphs = [p.strip() for p in _PARAGRAPH_RE.split(section_text) if p.strip()]
+    if len(paragraphs) > 1 and HEADER_RE.match(paragraphs[0]) and "\n" not in paragraphs[0]:
+        paragraphs[1] = f"{paragraphs[0]}\n\n{paragraphs[1]}"
+        paragraphs = paragraphs[1:]
+    return paragraphs
+
+
+def _split_markdown_sections(text: str) -> Iterable[tuple[tuple[str, ...], str]]:
+    """Yield (heading_path, section_text) pairs.
+
+    ``heading_path`` is the stack of heading titles (hashes stripped) from the
+    outermost ancestor down to the section's own heading; content before the
+    first header gets an empty path. The section_text includes its own header
+    line.
+    """
+    sections: list[tuple[tuple[str, ...], str]] = []
+    stack: list[tuple[int, str]] = []  # (level, heading_text)
     current: list[str] = []
     for line in text.split("\n"):
         if HEADER_RE.match(line):
             if current:
-                sections.append((current_header, "\n".join(current)))
-            current_header = line.strip()
+                sections.append((tuple(t for _, t in stack), "\n".join(current)))
+            level = len(line) - len(line.lstrip("#"))
+            heading = line.lstrip("#").strip()
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, heading))
             current = [line]
         else:
             current.append(line)
     if current:
-        sections.append((current_header, "\n".join(current)))
+        sections.append((tuple(t for _, t in stack), "\n".join(current)))
     return sections
+
+
+def _context_line(title: str | None, heading_path: tuple[str, ...]) -> str:
+    """Single breadcrumb line: ``title > heading > subheading``.
+
+    Consecutive duplicates are collapsed (a note titled like its own H1 should
+    not repeat itself). Empty when there is neither a title nor any heading.
+    """
+    parts = [p for p in ((title or "").strip(), *heading_path) if p]
+    deduped = [p for i, p in enumerate(parts) if i == 0 or p != parts[i - 1]]
+    return " > ".join(deduped)
 
 
 def _split_diff_segments(text: str) -> list[str]:

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from crossmodalrag.capabilities import require_ocr
-from crossmodalrag.chunking import chunk_text
+from crossmodalrag.chunking import CHUNKER_VERSION, chunk_text
 from crossmodalrag.embed.provider import EmbeddingProvider
 from crossmodalrag.ingest._embed import embed_source_chunks, purge_source_embeddings
 from crossmodalrag.modality import MODALITY_OCR, build_chunk_metadata
@@ -159,12 +159,15 @@ def _iso_mtime(mtime: float) -> str:
 
 
 def _source_fingerprint(file_bytes: bytes) -> str:
-    # Fold the OCR engine identity + version into the fingerprint so an engine
-    # upgrade re-derives intentionally, while unchanged input never churns.
+    # Fold the OCR engine identity + version and the chunker version into the
+    # fingerprint so an engine or chunker upgrade re-derives intentionally,
+    # while unchanged input never churns.
     hasher = hashlib.sha256()
     hasher.update(_ocr_engine_id().encode("utf-8"))
     hasher.update(b"\x1f")
     hasher.update(_ocr_engine_version().encode("utf-8"))
+    hasher.update(b"\x1f")
+    hasher.update(CHUNKER_VERSION.encode("utf-8"))
     hasher.update(b"\x1f")
     hasher.update(file_bytes)
     return hasher.hexdigest()

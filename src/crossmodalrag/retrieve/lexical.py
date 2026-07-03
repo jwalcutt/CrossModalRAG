@@ -101,8 +101,11 @@ def retrieve(
 
     scored.sort(key=lambda hit: hit.score, reverse=True)
     # Local import avoids a circular import (rerank imports from this module).
-    from crossmodalrag.retrieve.rerank import dedupe_hits
+    from crossmodalrag.retrieve.rerank import cap_hits_per_source, dedupe_hits
 
+    # Source-diversity cap applies only to open retrieval (see hybrid.retrieve).
+    if restrict_chunk_ids is None:
+        scored = cap_hits_per_source(scored)
     # max_kept bounds dedupe to O(top_k * n) over the full scored pool (see hybrid.retrieve).
     return dedupe_hits(scored, max_kept=top_k)
 

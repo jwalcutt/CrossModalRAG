@@ -167,6 +167,52 @@ def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def test_ingest_notes_rechunks_when_chunker_version_changes(tmp_path: Path, monkeypatch) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "note.md").write_text("stable content\nline two\n", encoding="utf-8")
+
+    conn = connect(tmp_path / "mem.db")
+    try:
+        init_db(conn)
+        assert ingest_notes(conn, vault) > 0
+        assert ingest_notes(conn, vault) == 0
+
+        # A chunker upgrade folds a new version into the fingerprint, so the
+        # skip is invalidated and the unchanged file re-chunks exactly once.
+        monkeypatch.setattr("crossmodalrag.ingest.notes.CHUNKER_VERSION", "test-bump")
+        assert ingest_notes(conn, vault) > 0
+        assert ingest_notes(conn, vault) == 0
+    finally:
+        conn.close()
+
+
+def test_ingest_git_rechunks_when_chunker_version_changes(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run(["git", "-C", str(repo), "init"])
+    _run(["git", "-C", str(repo), "config", "user.name", TEST_AUTHOR_NAME])
+    _run(["git", "-C", str(repo), "config", "user.email", TEST_AUTHOR_EMAIL])
+    (repo / "main.py").write_text("print('v1')\n", encoding="utf-8")
+    _run(["git", "-C", str(repo), "add", "main.py"])
+    _run(["git", "-C", str(repo), "commit", "-m", "initial"])
+
+    monkeypatch.setenv("TARGET_AUTHOR_NAME", TEST_AUTHOR_NAME)
+    monkeypatch.setenv("TARGET_AUTHOR_EMAIL", TEST_AUTHOR_EMAIL)
+
+    conn = connect(tmp_path / "mem.db")
+    try:
+        init_db(conn)
+        assert ingest_git(conn, repo_path=repo, max_commits=10) > 0
+        assert ingest_git(conn, repo_path=repo, max_commits=10) == 0
+
+        monkeypatch.setattr("crossmodalrag.ingest.git.CHUNKER_VERSION", "test-bump")
+        assert ingest_git(conn, repo_path=repo, max_commits=10) > 0
+        assert ingest_git(conn, repo_path=repo, max_commits=10) == 0
+    finally:
+        conn.close()
+
+
 def _data_snapshot(conn) -> tuple[list[tuple], list[tuple]]:
     sources = conn.execute(
         """

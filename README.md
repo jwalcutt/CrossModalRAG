@@ -59,6 +59,11 @@ mem ingest-notes /path/to/vault-a /path/to/vault-b
 
 If you omit paths, `mem ingest-notes` will use all `OBSIDIAN_VAULT_PATH_<n>` values from your local `.env`.
 
+Note chunking is markdown header-aware, and every chunk is prefixed with a one-line context
+breadcrumb — `note title > heading > subheading` — so a chunk's subject is part of its searchable
+and embedded text even when the body is mostly formulas or tables. Oversized sections are split on
+sentence/whitespace boundaries (never mid-word).
+
 1. Ingest git history:
 
 ```bash
@@ -113,11 +118,12 @@ values from your local `.env`.
 ### Forcing a re-chunk (after chunker changes)
 
 Ingestion is idempotent: a source whose content fingerprint is unchanged is skipped, and its
-existing chunks are left untouched. This means improvements to the chunking logic do **not**
-apply to already-ingested sources until their content changes.
+existing chunks are left untouched. Source fingerprints fold in the chunker version, so when a
+release changes the chunking logic (and bumps `CHUNKER_VERSION`), simply re-running ingestion
+(`mem sync`, or the individual `ingest-*` commands) re-chunks and re-embeds every existing source
+in place — unchanged sources under an unchanged chunker still never churn.
 
-There is currently no in-place `--force` flag on the ingest commands. To re-chunk existing
-data with the latest chunkers, rebuild the database from scratch:
+Alternatively, to re-chunk from a clean slate, rebuild the database from scratch:
 
 ```bash
 # Rebuild the default ./data/memory.db in place
@@ -237,6 +243,10 @@ Ranking includes a small additive **title boost** (`CMRAG_TITLE_BOOST_WEIGHT`, d
 query's terms wins near-ties against incidental mentions in commit diffs. Lexical matching
 also treats underscore notation and its plain spelling as equivalent (a note's `F_1`
 matches a query's `f1`).
+Retrieval also applies a **source-diversity cap** (`CMRAG_MAX_CHUNKS_PER_SOURCE`, default 2;
+0 disables): a single source contributes at most that many chunks to a result, so one strongly
+matching note cannot fill the whole evidence list and crowd out every other source. Drill-down
+retrieval from memory nodes is never capped (it deliberately ranks within one node's evidence).
 - `--no-llm` skips synthesis and returns the deterministic evidence template.
 - `--json` emits a structured answer (stable contract for UIs; includes `matched_nodes` at memory
 levels, plus a `timing` block — `total_seconds` for the whole ask and `generation_seconds` for the

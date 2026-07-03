@@ -196,8 +196,13 @@ def retrieve(
         )
 
     hits.sort(key=lambda hit: hit.score, reverse=True)
-    from crossmodalrag.retrieve.rerank import dedupe_hits
+    from crossmodalrag.retrieve.rerank import cap_hits_per_source, dedupe_hits
 
+    # Source-diversity cap applies only to open retrieval: drill-down
+    # (restrict_chunk_ids) deliberately ranks within one node's evidence,
+    # which is often a single source.
+    if restrict_chunk_ids is None:
+        hits = cap_hits_per_source(hits)
     # max_kept bounds dedupe to O(top_k * n): the candidate pool here is every chunk
     # with any signal, and unbounded pairwise dedupe over it dominated ask latency.
     return dedupe_hits(hits, max_kept=top_k)

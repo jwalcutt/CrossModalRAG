@@ -28,6 +28,7 @@ MODALITY_SOURCE_TYPES: dict[str, set[str]] = {
 }
 
 DEFAULT_DEDUPE_THRESHOLD = 0.95
+DEFAULT_MAX_CHUNKS_PER_SOURCE = 2
 
 
 def resolve_source_types(modalities: list[str] | None) -> set[str] | None:
@@ -45,12 +46,46 @@ def resolve_source_types(modalities: list[str] | None) -> set[str] | None:
     return resolved
 
 
+def get_max_chunks_per_source() -> int:
+    """Max chunks one source may occupy in a retrieval result. Default 2; 0 disables."""
+    raw = os.getenv("CMRAG_MAX_CHUNKS_PER_SOURCE", str(DEFAULT_MAX_CHUNKS_PER_SOURCE)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return DEFAULT_MAX_CHUNKS_PER_SOURCE
+
+
 def get_dedupe_threshold() -> float:
     raw = os.getenv("CMRAG_DEDUPE_THRESHOLD", str(DEFAULT_DEDUPE_THRESHOLD)).strip()
     try:
         return float(raw)
     except ValueError:
         return DEFAULT_DEDUPE_THRESHOLD
+
+
+def cap_hits_per_source(hits: list[RetrievalHit], cap: int | None = None) -> list[RetrievalHit]:
+    """Keep at most ``cap`` chunks per source, preserving score order.
+
+    Chunks of one source now share a title/heading context line, so a source whose
+    title matches the query can flood the whole top-k with its own chunks and crowd
+    every other source out of the evidence list. Capping keeps the best chunks of
+    the winning source while leaving room for the rest of the corpus — it never
+    demotes a source's *best* chunk, so source-level recall/MRR can only improve.
+    ``cap`` defaults to ``CMRAG_MAX_CHUNKS_PER_SOURCE``; 0 disables capping.
+    """
+    if cap is None:
+        cap = get_max_chunks_per_source()
+    if cap <= 0:
+        return hits
+    counts: dict[int, int] = {}
+    kept: list[RetrievalHit] = []
+    for hit in hits:
+        seen = counts.get(hit.source_id, 0)
+        if seen >= cap:
+            continue
+        counts[hit.source_id] = seen + 1
+        kept.append(hit)
+    return kept
 
 
 def dedupe_hits(

@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
-from crossmodalrag.chunking import chunk_diff
+from crossmodalrag.chunking import CHUNKER_VERSION, chunk_diff
 from crossmodalrag.embed.provider import EmbeddingProvider
 from crossmodalrag.ingest._embed import embed_source_chunks, purge_source_embeddings
 
@@ -90,7 +90,13 @@ def ingest_git(
 
 
 def _source_fingerprint(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # Fold the chunker version into the fingerprint so a chunker upgrade re-chunks
+    # intentionally on the next ingest, while unchanged input never churns.
+    hasher = hashlib.sha256()
+    hasher.update(CHUNKER_VERSION.encode("utf-8"))
+    hasher.update(b"\x1f")
+    hasher.update(text.encode("utf-8"))
+    return hasher.hexdigest()
 
 
 def _upsert_git_source(
