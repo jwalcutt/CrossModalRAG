@@ -160,7 +160,9 @@ mem ask "Why did I change the parser?" --top-k 5 --profile relevant --explain
 ```
 
 By default `mem ask` synthesizes a grounded answer with a local LLM via Ollama, constrained to
-the retrieved evidence and citing it inline as `[E#]`. If retrieval is too weak (top score below
+the retrieved evidence and citing it inline as `[E#]` — integrating across all materially
+relevant evidence items (multi-citing sources that independently agree) rather than answering
+from the single top hit. If retrieval is too weak (top score below
 `CMRAG_MIN_EVIDENCE_SCORE`) it abstains instead of guessing; when the evidence only partially
 covers the question it answers what the evidence supports and states what it doesn't cover,
 rather than refusing outright. Every abstention carries a reason — `weak_retrieval` (the gate

@@ -372,3 +372,44 @@ def test_partial_answer_instruction_present_in_system_prompt() -> None:
     assert "PARTIALLY" in SYSTEM_PROMPT
     assert "NONE" in SYSTEM_PROMPT
     assert INSUFFICIENT_EVIDENCE_TEXT in SYSTEM_PROMPT
+
+
+# --- Gap D: breadth synthesis -----------------------------------------------------------
+
+
+def test_breadth_instruction_present_in_system_prompt() -> None:
+    # Multi-source synthesis: the prompt must direct the model to integrate every
+    # materially relevant item and multi-cite agreeing sources, not pad citations.
+    from crossmodalrag.generate.synthesize import SYSTEM_PROMPT
+
+    assert "EVERY evidence item" in SYSTEM_PROMPT
+    assert "[E1][E3]" in SYSTEM_PROMPT
+    assert "Never cite an item that did not contribute" in SYSTEM_PROMPT
+
+
+def test_source_coverage_counts_distinct_sources_not_citations(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    conn = connect(tmp_path / "memory.db")
+    init_db(conn)
+    # Two chunks from the SAME source: citing both must count the source once.
+    cur = conn.execute(
+        "INSERT INTO sources (source_type, source_uri, timestamp, title) VALUES (?, ?, ?, ?)",
+        ("note", "/abs/a.md", "2026-06-01T00:00:00+00:00", "parser"),
+    )
+    sid = int(cur.lastrowid)
+    for i in range(2):
+        conn.execute(
+            "INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text) VALUES (?, ?, ?)",
+            (sid, i, f"parser bounds check part {i}"),
+        )
+    conn.execute(
+        "INSERT INTO queries_eval (query_text, expected_source_uris) VALUES (?, ?)",
+        ("[t2] parser bounds", json.dumps(["/abs/a.md", "/abs/b.md"])),
+    )
+    conn.commit()
+
+    # The stub cites two evidence ids, but both resolve to /abs/a.md.
+    summary = run_generation_eval(
+        conn, StubLLMProvider(output="Answer [E1][E2]."), query_prefix="[t2]"
+    )
+    assert summary.source_coverage == 0.5  # one distinct gold source of two, not 2/2
