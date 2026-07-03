@@ -21,9 +21,19 @@ SYSTEM_PROMPT = (
     "Answer ONLY using the numbered evidence provided. Do not use any outside knowledge.\n"
     "Every claim in your answer MUST cite its supporting evidence inline using the bracket "
     "ids exactly as shown, e.g. [E1] or [E2][E3].\n"
-    "If the evidence does not contain enough information to answer, respond with EXACTLY this "
+    "If the evidence only PARTIALLY addresses the question, answer what the evidence does "
+    "support and state explicitly what it does not cover. A partial, clearly-caveated answer "
+    "is always preferred over refusing — do not refuse just because coverage is incomplete.\n"
+    "Only if NONE of the evidence is relevant to the question, respond with EXACTLY this "
     f"sentence and nothing else:\n{INSUFFICIENT_EVIDENCE_TEXT}"
 )
+
+# Why an answer abstained: the retrieval gate short-circuited before the LLM
+# ("weak_retrieval") vs the model itself judged the evidence insufficient
+# ("llm_insufficient"). The two used to render identically, which hid
+# model-side over-refusal on well-retrieved evidence.
+ABSTAIN_WEAK_RETRIEVAL = "weak_retrieval"
+ABSTAIN_LLM_INSUFFICIENT = "llm_insufficient"
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,8 @@ class GeneratedAnswer:
     # before calling it). Surfaced via the `timing` JSON block so latency
     # regressions are measurable rather than anecdotal.
     generation_seconds: float = 0.0
+    # None when answered; ABSTAIN_WEAK_RETRIEVAL / ABSTAIN_LLM_INSUFFICIENT when abstained.
+    abstention_reason: str | None = None
 
 
 def build_evidence_prompt(
@@ -104,6 +116,7 @@ def synthesize_answer(
             evidence=hits,
             abstained=True,
             model=provider.name,
+            abstention_reason=ABSTAIN_WEAK_RETRIEVAL,
         )
 
     system, prompt, id_map = build_evidence_prompt(query, hits)
@@ -128,4 +141,5 @@ def synthesize_answer(
         raw_output=raw_output,
         id_map=id_map,
         generation_seconds=generation_seconds,
+        abstention_reason=ABSTAIN_LLM_INSUFFICIENT if abstained else None,
     )

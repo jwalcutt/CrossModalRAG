@@ -61,7 +61,11 @@ def format_generated_answer(gen: GeneratedAnswer, explain: bool = False, debug: 
     lines.append(f'Query: "{gen.query}"')
     lines.append(f"Model: {gen.model}")
     if gen.abstained:
-        lines.append("Status: abstained (insufficient evidence)")
+        # Distinguish gate refusals from model refusals, and show the top retrieval
+        # score so "abstained despite strong evidence" is visible, not hidden.
+        top_score = gen.evidence[0].score if gen.evidence else 0.0
+        reason = gen.abstention_reason or "insufficient evidence"
+        lines.append(f"Status: abstained ({reason}; top retrieval score {top_score:.3f})")
     lines.append("")
     lines.append("Answer:")
     lines.append(gen.answer_text)
@@ -111,6 +115,7 @@ def generated_answer_to_dict(gen: GeneratedAnswer, *, total_seconds: float | Non
         "query": gen.query,
         "model": gen.model,
         "abstained": gen.abstained,
+        "abstention_reason": gen.abstention_reason,
         "answer": gen.answer_text,
         "timing": {
             "total_seconds": _round_seconds(total_seconds),
@@ -158,6 +163,8 @@ def template_answer_to_dict(
         "query": query,
         "model": None,
         "abstained": not hits,
+        # No LLM in this path: the only abstention cause is empty retrieval.
+        "abstention_reason": None if hits else "weak_retrieval",
         "answer": None,
         "timing": {
             "total_seconds": _round_seconds(total_seconds),

@@ -161,8 +161,12 @@ mem ask "Why did I change the parser?" --top-k 5 --profile relevant --explain
 
 By default `mem ask` synthesizes a grounded answer with a local LLM via Ollama, constrained to
 the retrieved evidence and citing it inline as `[E#]`. If retrieval is too weak (top score below
-`CMRAG_MIN_EVIDENCE_SCORE`) it abstains instead of guessing. If Ollama is unreachable it
-automatically falls back to the deterministic evidence template.
+`CMRAG_MIN_EVIDENCE_SCORE`) it abstains instead of guessing; when the evidence only partially
+covers the question it answers what the evidence supports and states what it doesn't cover,
+rather than refusing outright. Every abstention carries a reason — `weak_retrieval` (the gate
+short-circuited before the LLM) or `llm_insufficient` (the model judged the evidence irrelevant) —
+shown in the status line alongside the top retrieval score, and as `abstention_reason` in `--json`.
+If Ollama is unreachable it automatically falls back to the deterministic evidence template.
 
 Requires [Ollama](https://ollama.com) running locally with a model pulled
 (`ollama pull gemma4`). Swap models anytime via `CMRAG_LLM_MODEL`.

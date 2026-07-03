@@ -316,3 +316,59 @@ def test_ask_falls_back_to_template_when_llm_unavailable(tmp_path, monkeypatch, 
     out = capsys.readouterr()
     assert "Evidence-grounded findings" in out.out
     assert "falling back" in out.err
+
+
+# --- abstention_reason: gate vs model refusals must be distinguishable --------------------
+
+
+def test_gate_abstention_reason_is_weak_retrieval() -> None:
+    gen = synthesize_answer(
+        "q", [_hit(1, "alpha", score=0.05)], StubLLMProvider(), min_evidence_score=0.15
+    )
+    assert gen.abstained
+    assert gen.abstention_reason == "weak_retrieval"
+
+
+def test_no_hits_abstention_reason_is_weak_retrieval() -> None:
+    gen = synthesize_answer("q", [], StubLLMProvider())
+    assert gen.abstention_reason == "weak_retrieval"
+
+
+def test_llm_abstention_reason_is_llm_insufficient() -> None:
+    provider = StubLLMProvider(output=INSUFFICIENT_EVIDENCE_TEXT)
+    gen = synthesize_answer("q", [_hit(1, "alpha")], provider, min_evidence_score=0.0)
+    assert gen.abstained
+    assert provider.calls == 1  # the model was consulted and refused
+    assert gen.abstention_reason == "llm_insufficient"
+
+
+def test_answered_query_has_no_abstention_reason() -> None:
+    gen = synthesize_answer("q", [_hit(1, "alpha")], StubLLMProvider(), min_evidence_score=0.0)
+    assert not gen.abstained
+    assert gen.abstention_reason is None
+
+
+def test_abstention_reason_in_json_contract() -> None:
+    provider = StubLLMProvider(output=INSUFFICIENT_EVIDENCE_TEXT)
+    gen = synthesize_answer("q", [_hit(1, "alpha")], provider, min_evidence_score=0.0)
+    data = generated_answer_to_dict(gen)
+    assert data["abstention_reason"] == "llm_insufficient"
+    answered = synthesize_answer("q", [_hit(1, "alpha")], StubLLMProvider(), min_evidence_score=0.0)
+    assert generated_answer_to_dict(answered)["abstention_reason"] is None
+
+
+def test_abstention_status_line_shows_reason_and_top_score() -> None:
+    provider = StubLLMProvider(output=INSUFFICIENT_EVIDENCE_TEXT)
+    gen = synthesize_answer("q", [_hit(1, "alpha", score=0.9)], provider, min_evidence_score=0.0)
+    text = format_generated_answer(gen)
+    assert "abstained (llm_insufficient; top retrieval score 0.900)" in text
+
+
+def test_partial_answer_instruction_present_in_system_prompt() -> None:
+    # The Q6-class fix: the prompt must offer a partial-answer middle path and
+    # reserve the exact-sentence refusal for the no-relevant-evidence case only.
+    from crossmodalrag.generate.synthesize import SYSTEM_PROMPT
+
+    assert "PARTIALLY" in SYSTEM_PROMPT
+    assert "NONE" in SYSTEM_PROMPT
+    assert INSUFFICIENT_EVIDENCE_TEXT in SYSTEM_PROMPT
