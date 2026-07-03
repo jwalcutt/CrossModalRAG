@@ -53,6 +53,8 @@ def format_grounded_answer(query: str, hits: list[RetrievalHit], explain: bool =
                 f"usage={hit.usage_score:.3f} "
                 f"title={hit.title_score:.3f}"
             )
+            if hit.subquery:
+                lines.append(f"   Sub-query: {hit.subquery}")
         lines.append(f"   Excerpt: {preview}")
     return "\n".join(lines)
 
@@ -93,6 +95,8 @@ def format_generated_answer(gen: GeneratedAnswer, explain: bool = False, debug: 
                     f"lexical={hit.lexical_score:.3f} recency={hit.recency_score:.3f} "
                     f"usage={hit.usage_score:.3f} title={hit.title_score:.3f}"
                 )
+                if hit.subquery:
+                    lines.append(f"      sub-query: {hit.subquery}")
             lines.append(f"      excerpt: {_preview(hit.chunk_text)}")
 
     if debug:
@@ -138,6 +142,7 @@ def generated_answer_to_dict(gen: GeneratedAnswer, *, total_seconds: float | Non
                 "locator": format_locator(hit.source_uri, _locator(hit)),
                 "page": _page_of(hit),
                 "ocr_confidence": _ocr_conf_of(hit),
+                "subquery": hit.subquery,
                 "scores": {
                     "combined": hit.score,
                     "vector": hit.vector_score,

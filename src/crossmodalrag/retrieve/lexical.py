@@ -28,6 +28,9 @@ class RetrievalHit:
     chunk_metadata_json: str | None = None
     usage_score: float = 0.0
     title_score: float = 0.0
+    # Set when comparative-query decomposition produced this hit: the sub-query
+    # ("X" or "Y" of "difference between X and Y") that retrieved it.
+    subquery: str | None = None
 
 
 def retrieve(

@@ -31,6 +31,7 @@ def retrieve(
     restrict_chunk_ids: set[int] | None = None,
     restrict_source_types: set[str] | None = None,
     now: datetime | None = None,
+    decompose: bool = True,
 ) -> list[RetrievalHit]:
     """Hybrid retrieval blending semantic, lexical, and recency signals.
 
@@ -39,11 +40,46 @@ def retrieve(
     when given, limits scoring to that chunk set (used for level-targeted
     drill-down retrieval); ``restrict_source_types`` limits to a modality's
     source_type(s) (the ``--modality`` filter).
+
+    A comparative query ("difference between X and Y", "X vs Y") is retrieved as
+    two sub-queries with reserved slots per side, so the better-represented
+    subject cannot crowd the other out of the evidence entirely. Applies only to
+    top-level retrieval (not drill-down); non-matching queries are unaffected.
     """
     if profile not in PROFILE_WEIGHTS:
         raise ValueError(
             f"Unknown profile '{profile}'. Choose from: {', '.join(sorted(PROFILE_WEIGHTS))}."
         )
+
+    if decompose and restrict_chunk_ids is None:
+        from crossmodalrag.retrieve.decompose import merge_side_hits, split_comparative_query
+
+        comp = split_comparative_query(query)
+        if comp is not None:
+            def _sub_retrieve(subquery: str, stamp: bool = True) -> list[RetrievalHit]:
+                hits = retrieve(
+                    conn,
+                    query=subquery,
+                    top_k=top_k,
+                    profile=profile,
+                    provider=provider,
+                    restrict_source_types=restrict_source_types,
+                    now=now,
+                    decompose=False,
+                )
+                if stamp:
+                    for hit in hits:
+                        hit.subquery = subquery
+                return hits
+
+            # Full-query pass keeps joint-context ranking (a source covering both
+            # subjects); per-side passes guarantee each subject representation.
+            return merge_side_hits(
+                _sub_retrieve(comp.left),
+                _sub_retrieve(comp.right),
+                top_k,
+                full_hits=_sub_retrieve(query, stamp=False),
+            )
 
     provider = provider or get_default_provider()
     if provider is None or not has_vectors_for_model(conn, provider.name):

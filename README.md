@@ -225,6 +225,12 @@ then drills them down to their L0 evidence and answers grounded in (and citing) 
 provenance holds regardless of entry level. Memory-level retrieval needs the hierarchy built
 (`mem build-memory`) and benefits from node embeddings (`mem reindex-embeddings`); without the
 embeddings extra it ranks nodes lexically.
+- **Comparative queries** ("difference between X and Y", "compare X with Y", "X vs Y") are
+detected deterministically (no LLM) and retrieved as three passes — the full query plus one per
+subject — merged with reserved slots, so the better-represented subject cannot crowd the other
+out of the evidence entirely. If one side has no evidence, the answer covers the present side
+and says what's missing. Non-comparative queries retrieve exactly as before; `--explain` and
+`--json` show which sub-query produced each hit (`subquery`).
 - `--explain` prints per-hit score components (vector / lexical / recency / usage / title).
 Ranking includes a small additive **title boost** (`CMRAG_TITLE_BOOST_WEIGHT`, default 0.05;
 0 disables): query-term overlap with the source *title*, so a note literally named for the
