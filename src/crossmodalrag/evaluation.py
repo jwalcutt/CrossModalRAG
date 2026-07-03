@@ -291,6 +291,59 @@ def load_eval_queries_file(path: Path) -> list[EvalQuery]:
     return out
 
 
+@dataclass(frozen=True)
+class EvalQueryWarning:
+    """A suspicious-but-not-fatal problem in a loaded eval query row.
+
+    Malformed gold URIs never match a retrieved source, which silently zeroes
+    grounding metrics — so loading warns instead of failing (a query file may
+    legitimately predate ingestion of its sources).
+    """
+
+    row: int
+    query_text: str
+    uri: str
+    issue: str  # "not_absolute" | "doubled_slash" | "unknown_source"
+
+
+def validate_eval_queries(
+    queries: list[EvalQuery],
+    *,
+    known_source_uris: set[str] | None = None,
+) -> list[EvalQueryWarning]:
+    """Check expected_source_uris for problems that would silently break URI matching.
+
+    - ``doubled_slash``: an empty path segment (e.g. ``//Users/...``) — almost always a typo.
+    - ``not_absolute``: neither an absolute path nor a ``scheme://`` URI.
+    - ``unknown_source``: not ingested (checked only when ``known_source_uris`` is a
+      non-empty set, so an empty/fresh DB doesn't flag every row). Git gold URIs use the
+      ``<repo>@<sha>`` form, which matches the stored source URI exactly.
+    """
+    warnings: list[EvalQueryWarning] = []
+    for row, query in enumerate(queries, start=1):
+        for uri in query.expected_source_uris:
+            issue = _uri_issue(uri)
+            if issue is None and known_source_uris and uri not in known_source_uris:
+                issue = "unknown_source"
+            if issue is not None:
+                warnings.append(
+                    EvalQueryWarning(row=row, query_text=query.query_text, uri=uri, issue=issue)
+                )
+    return warnings
+
+
+def _uri_issue(uri: str) -> str | None:
+    scheme, sep, rest = uri.partition("://")
+    path = rest if sep else uri
+    if sep and not scheme:
+        return "not_absolute"  # e.g. "://x" — no scheme
+    if not sep and not uri.startswith("/"):
+        return "not_absolute"
+    if "//" in path:
+        return "doubled_slash"
+    return None
+
+
 def upsert_eval_queries(conn: sqlite3.Connection, queries: list[EvalQuery]) -> int:
     for q in queries:
         expected_json = json.dumps(q.expected_source_uris)

@@ -14,6 +14,8 @@ Current scope:
 - Synthesize grounded answers with a local LLM (Ollama) constrained to and citing the evidence,
 abstaining when evidence is weak; falls back to a deterministic template when Ollama is absent.
 
+
+
 ## Quickstart
 
 1. Create a virtual environment and install:
@@ -31,7 +33,7 @@ dependency-free; without this extra everything still works using lexical retriev
 pip install -e ".[embeddings]"   # adds fastembed (ONNX, local, no torch) + numpy
 ```
 
-2. Initialize the local database:
+1. Initialize the local database:
 
 ```bash
 mem init-db
@@ -43,7 +45,7 @@ Optional: seed deterministic synthetic notes + git history for smoke testing:
 mem seed-sample
 ```
 
-3. Ingest notes:
+1. Ingest notes:
 
 ```bash
 mem ingest-notes /path/to/obsidian/vault
@@ -57,7 +59,7 @@ mem ingest-notes /path/to/vault-a /path/to/vault-b
 
 If you omit paths, `mem ingest-notes` will use all `OBSIDIAN_VAULT_PATH_<n>` values from your local `.env`.
 
-4. Ingest git history:
+1. Ingest git history:
 
 ```bash
 mem ingest-git /path/to/repo --max-commits 300
@@ -139,7 +141,7 @@ Note: a full rebuild also clears the `queries_eval` table. If you have custom ev
 queries, re-add them with `mem eval --load-queries file.json` (see the query file format below)
 after re-ingesting.
 
-5. (Optional) Build semantic embeddings for ingested chunks:
+1. (Optional) Build semantic embeddings for ingested chunks:
 
 ```bash
 mem reindex-embeddings
@@ -151,7 +153,7 @@ is installed, so `reindex-embeddings` is mainly for backfilling existing data or
 the model. Vectors are tagged with the model that produced them; changing `CMRAG_EMBED_MODEL`
 means you should re-run this command.
 
-6. Ask a question:
+1. Ask a question:
 
 ```bash
 mem ask "Why did I change the parser?" --top-k 5 --profile relevant --explain
@@ -170,61 +172,61 @@ Requires [Ollama](https://ollama.com) running locally with a model pulled
   - `relevant`: 0.70 vector + 0.25 lexical + 0.05 recency
   - `recent`: 0.35 vector + 0.20 lexical + 0.45 recency
   - `usage`: 0.55 vector + 0.25 lexical + 0.05 recency + **0.15 usage** (rehearsal strength) — an
-    **opt-in** time/usage-aware profile that promotes memories you've used recently/often. The usage
-    term is 0 in every other profile, so they are unchanged. It re-ranks only already-relevant
-    candidates (never surfaces irrelevant ones) and needs embeddings + a usage history
-    (`CMRAG_USAGE_HALFLIFE_DAYS`, `CMRAG_USAGE_SATURATION`). `--explain`/`--json` expose a `usage`
-    score component.
+  **opt-in** time/usage-aware profile that promotes memories you've used recently/often. The usage
+  term is 0 in every other profile, so they are unchanged. It re-ranks only already-relevant
+  candidates (never surfaces irrelevant ones) and needs embeddings + a usage history
+  (`CMRAG_USAGE_HALFLIFE_DAYS`, `CMRAG_USAGE_SATURATION`). `--explain`/`--json` expose a `usage`
+  score component.
 - **Usage tracking is opt-in and private.** The `usage` profile's history comes from real `mem ask`
-  interactions, but tracking is **off by default**. Enable it with `CMRAG_USAGE_TRACKING=on`, or
-  per-call with `mem ask … --track` (logs `retrieval_hit` for the evidence shown) and
-  `mem ask … --accept` (also logs `accepted_answer` for the cited evidence; implies `--track`).
-  `mem ask … --level …` additionally logs an `open` event for the memory nodes drilled into.
-  `--no-track` suppresses logging for a call. Only the target id + event type + time are stored —
-  **never your query text** — and everything stays local. Inspect with `mem usage`; wipe with
-  `mem usage --clear`.
+interactions, but tracking is **off by default**. Enable it with `CMRAG_USAGE_TRACKING=on`, or
+per-call with `mem ask … --track` (logs `retrieval_hit` for the evidence shown) and
+`mem ask … --accept` (also logs `accepted_answer` for the cited evidence; implies `--track`).
+`mem ask … --level …` additionally logs an `open` event for the memory nodes drilled into.
+`--no-track` suppresses logging for a call. Only the target id + event type + time are stored —
+**never your query text** — and everything stays local. Inspect with `mem usage`; wipe with
+`mem usage --clear`.
 - **Forgetting risk** (`mem forgetting`): surfaces important-but-stale memories — "what am I likely
-  forgetting that's still relevant?" Each memory node is scored `risk = importance × staleness`, where
-  importance is its graph centrality (run `mem build-memory` first) and staleness grows with time since
-  you last touched it (a recent `retrieval`/`open` via tracking, or its content age) — so rehearsing a
-  memory lowers its risk. Every item is grounded to its L0 evidence and shows its
-  importance/staleness/confidence components. Use `--level all` to rank across events/episodes/concepts.
-  Read-only.
+forgetting that's still relevant?" Each memory node is scored `risk = importance × staleness`, where
+importance is its graph centrality (run `mem build-memory` first) and staleness grows with time since
+you last touched it (a recent `retrieval`/`open` via tracking, or its content age) — so rehearsing a
+memory lowers its risk. Every item is grounded to its L0 evidence and shows its
+importance/staleness/confidence components. Use `--level all` to rank across events/episodes/concepts.
+Read-only.
 - **Active recall** (`mem recall`): turns the highest forgetting-risk memories into grounded study
-  cards — a question plus a one-sentence answer drawn **strictly from that memory's L0 evidence**.
-  Cards are generated by the local LLM (`CMRAG_EXTRACT_MODEL`, temp 0) and **cached** (regenerated only
-  when the underlying memory changes, or with `--regenerate`); if Ollama is unavailable it falls back
-  to a deterministic template question + an evidence excerpt, so it never fails. Each card cites its
-  evidence. `--level all` covers events/episodes/concepts.
+cards — a question plus a one-sentence answer drawn **strictly from that memory's L0 evidence**.
+Cards are generated by the local LLM (`CMRAG_EXTRACT_MODEL`, temp 0) and **cached** (regenerated only
+when the underlying memory changes, or with `--regenerate`); if Ollama is unavailable it falls back
+to a deterministic template question + an evidence excerpt, so it never fails. Each card cites its
+evidence. `--level all` covers events/episodes/concepts.
 - **Concept drift** (`mem drift`): shows how your L3 concepts have **moved over time** — for each
-  concept, its member events are bucketed into time windows (`CMRAG_DRIFT_WINDOW_DAYS`, default 30),
-  a per-window prototype (centroid) is computed, and the drift between consecutive windows is scored
-  as `1 − cosine`. Concepts re-engaged after an empty window are flagged as **relearning**. Each item
-  shows window count, span, support, confidence, and a grounding URI. Build the snapshots first with
-  `mem build-memory --level drift` (deterministic, no LLM; needs the `[embeddings]` extra); `mem drift`
-  is a read-only view. Note timestamps drive the windows — see "date-aware note dates" below.
-  `mem drift --json` emits a stable contract (per concept: `concept_id`, `overall_drift`, `relearning`,
-  a grounding URI, and a `windows` array — the movement trajectory for a UI to plot).
+concept, its member events are bucketed into time windows (`CMRAG_DRIFT_WINDOW_DAYS`, default 30),
+a per-window prototype (centroid) is computed, and the drift between consecutive windows is scored
+as `1 − cosine`. Concepts re-engaged after an empty window are flagged as **relearning**. Each item
+shows window count, span, support, confidence, and a grounding URI. Build the snapshots first with
+`mem build-memory --level drift` (deterministic, no LLM; needs the `[embeddings]` extra); `mem drift`
+is a read-only view. Note timestamps drive the windows — see "date-aware note dates" below.
+`mem drift --json` emits a stable contract (per concept: `concept_id`, `overall_drift`, `relearning`,
+a grounding URI, and a `windows` array — the movement trajectory for a UI to plot).
 - **Distilled stand-ins** (`mem distill`): lists the compact, retrieval-preserving representations
-  built by `mem build-memory --level distill` — for each L2/L3 node, its summary, the kept (core) vs
-  full L0 evidence counts, the achieved compression ratio, confidence, and a grounding URI. Read-only.
-  `mem distill --json` adds a stable per-node contract plus the per-level `overall_compression_ratio`.
-  Whether to actually retrieve via these stand-ins in production is decided by the distillation gate
-  (`scripts/distill_gate.py`), not enabled by default — see the distillation gate section below.
+built by `mem build-memory --level distill` — for each L2/L3 node, its summary, the kept (core) vs
+full L0 evidence counts, the achieved compression ratio, confidence, and a grounding URI. Read-only.
+`mem distill --json` adds a stable per-node contract plus the per-level `overall_compression_ratio`.
+Whether to actually retrieve via these stand-ins in production is decided by the distillation gate
+(`scripts/distill_gate.py`), not enabled by default — see the distillation gate section below.
 - `--level` chooses the retrieval level: `evidence` (default, L0 chunks) or a memory level
-  (`event`/`episode`/`concept`). At a memory level, `ask` retrieves the matching nodes, prints them,
-  then drills them down to their L0 evidence and answers grounded in (and citing) that L0 — so
-  provenance holds regardless of entry level. Memory-level retrieval needs the hierarchy built
-  (`mem build-memory`) and benefits from node embeddings (`mem reindex-embeddings`); without the
-  embeddings extra it ranks nodes lexically.
+(`event`/`episode`/`concept`). At a memory level, `ask` retrieves the matching nodes, prints them,
+then drills them down to their L0 evidence and answers grounded in (and citing) that L0 — so
+provenance holds regardless of entry level. Memory-level retrieval needs the hierarchy built
+(`mem build-memory`) and benefits from node embeddings (`mem reindex-embeddings`); without the
+embeddings extra it ranks nodes lexically.
 - `--explain` prints per-hit score components.
 - `--no-llm` skips synthesis and returns the deterministic evidence template.
 - `--json` emits a structured answer (stable contract for UIs; includes `matched_nodes` at memory levels).
-  Each evidence entry also carries cross-modal provenance: `modality`, a rendered `locator`
-  (e.g. `spec.pdf p.4`), and `page` / `ocr_confidence` when applicable (additive; existing fields
-  unchanged).
+Each evidence entry also carries cross-modal provenance: `modality`, a rendered `locator`
+(e.g. `spec.pdf p.4`), and `page` / `ocr_confidence` when applicable (additive; existing fields
+unchanged).
 - `--modality` restricts evidence to one or more modalities (repeatable): `text` (notes), `code`
-  (git), `pdf`, `image` (OCR'd images). Citations render the modality and locator inline.
+(git), `pdf`, `image` (OCR'd images). Citations render the modality and locator inline.
 - `--debug` adds retrieval diagnostics plus the raw prompt and model output.
 
 ```bash
@@ -235,14 +237,16 @@ mem ask "what does the spec say about rate limits?" --modality pdf --json   # on
 Near-identical evidence is de-duplicated across modalities (e.g. an OCR'd screenshot of a note and
 the note itself) so the same content isn't cited twice (`CMRAG_DEDUPE_THRESHOLD`, default 0.95).
 
-7. Run retrieval evaluation (using seeded sample queries or your own `queries_eval` rows):
+1. Run retrieval evaluation (using seeded sample queries or your own `queries_eval` rows):
+
+
 
 ```bash
 mem eval --top-k 5 --profile relevant                 # evidence-level recall/MRR
 mem eval --top-k 5 --level concept                    # drill-down recall via the concept layer
 ```
 
-8. Evaluate grounded answer quality (citation faithfulness, requires Ollama):
+1. Evaluate grounded answer quality (citation faithfulness, requires Ollama):
 
 ```bash
 mem eval-generation --query-prefix "[sample]" --profile relevant            # flat L0 baseline
@@ -289,32 +293,36 @@ checks for measuring no regression.
 - `mem concepts [--top N] [--json]` (L3 concepts by centrality)
 - `mem timeline [--limit N] [--json]` (L2 episodes, oldest first)
 
+
+
 ### Operations (sync, doctor, progress, exit codes)
 
-- **`mem sync`** re-ingests every connector configured in your `.env` (`OBSIDIAN_VAULT_PATH_*`,
-  `REPO_PATH_*`, `PDF_PATH_*`, `IMAGE_PATH_*`) in one pass. It is **incremental and idempotent**:
-  ingestion fingerprint-skips unchanged sources, so a second run re-chunks only what changed. PDF/image
-  connectors are **skipped with a note** (not an error) when their extra is absent, and a bad path is
-  reported per-connector without aborting the rest of the sync. `--only` restricts to specific
-  connectors; `--json` emits a summary.
-- **`mem doctor`** is a read-only health check — DB path/size, which optional extras are installed,
-  whether Ollama is reachable, the active embed/LLM/extract models, configured connector counts, and
-  memory build + integrity. Use it to diagnose "why is retrieval lexical-only?" or "why did `ask`
-  fall back to the template?".
-- **Progress.** Long operations (`ingest-*`, `sync`, `reindex-embeddings`, `build-memory`) print a
-  progress line to **stderr only when it is an interactive terminal**, so piping or `--json` output is
-  never polluted.
+- `mem sync` re-ingests every connector configured in your `.env` (`OBSIDIAN_VAULT_PATH_*`,
+`REPO_PATH_*`, `PDF_PATH_*`, `IMAGE_PATH_*`) in one pass. It is **incremental and idempotent**:
+ingestion fingerprint-skips unchanged sources, so a second run re-chunks only what changed. PDF/image
+connectors are **skipped with a note** (not an error) when their extra is absent, and a bad path is
+reported per-connector without aborting the rest of the sync. `--only` restricts to specific
+connectors; `--json` emits a summary.
+- `mem doctor` is a read-only health check — DB path/size, which optional extras are installed,
+whether Ollama is reachable, the active embed/LLM/extract models, configured connector counts, and
+memory build + integrity. Use it to diagnose "why is retrieval lexical-only?" or "why did `ask`
+fall back to the template?".
+- **Progress.** Long operations (`ingest-`*, `sync`, `reindex-embeddings`, `build-memory`) print a
+progress line to **stderr only when it is an interactive terminal**, so piping or `--json` output is
+never polluted.
 - **Exit codes.** `0` success; `1` an expected, reported failure (printed as `error: <message>`, no
-  stack trace); `2` a command-line usage error.
+stack trace); `2` a command-line usage error.
 - **Backup / restore.** `mem backup [<dest>]` writes a WAL-safe single-file copy of the DB (default:
-  alongside it with a timestamp). `mem restore <src>` replaces the active DB from a backup; it is
-  **destructive** and refuses to overwrite an existing DB unless you pass `--force`.
+alongside it with a timestamp). `mem restore <src>` replaces the active DB from a backup; it is
+**destructive** and refuses to overwrite an existing DB unless you pass `--force`.
+
+
 
 ### Config file (optional)
 
 Beyond `.env`, an optional **TOML** config file can hold connector paths and retrieval defaults.
 CrossModalRAG looks for `$CMRAG_CONFIG`, else `./crossmodalrag.toml`. Copy `crossmodalrag.toml.example`
-to get started. Resolution precedence is always **CLI flag > environment/`.env` > config file > built-in
+to get started. Resolution precedence is always **CLI flag > environment/**`.env` **> config file > built-in
 default**, so the config never overrides something you pass explicitly, and the eval baselines (which
 pass an explicit profile) do not move.
 
@@ -341,12 +349,12 @@ evidence ids + L0 locators) so a consumer can drill back down to the source. The
 library (the `*_to_dict` / `list_*` / `memory_stats` helpers) and pinned by `tests/test_json_contracts.py`,
 so the CLI and any future API/UI render exactly the same payloads.
 
-### Web UI &amp; local API (`mem serve`)
+### Web UI & local API (`mem serve`)
 
 `mem serve` runs a **local, read-only HTTP API** *and* serves a **web console** (a memory dashboard:
 ask with claim → exact-evidence drill-down, browse concepts, timeline, concept-drift movement, and
 forgetting/recall). It requires the opt-in `[ui]` extra (`pip install -e ".[ui]"`, adds FastAPI +
-uvicorn) and **binds `127.0.0.1` by default** — no auth on loopback, nothing leaves the machine, all
+uvicorn) and **binds** `127.0.0.1` **by default** — no auth on loopback, nothing leaves the machine, all
 assets (including fonts) vendored. Without the extra, `mem serve` exits with an install hint.
 
 ```bash
@@ -379,30 +387,30 @@ Currently implemented: the node/edge substrate plus **L1 atomic-event extraction
 grouping**, and **L3 concept clustering**. `mem build-memory` derives all three:
 
 - **L1 events** (requires Ollama): a local LLM extracts atomic events ("what happened": a decision,
-  learning, fix, task, or change) from each source — including PDF pages and OCR'd images — linking
-  each event to its L0 evidence (so the hierarchy spans modalities and drills back to a cited
-  page/region locator).
+learning, fix, task, or change) from each source — including PDF pages and OCR'd images — linking
+each event to its L0 evidence (so the hierarchy spans modalities and drills back to a cited
+page/region locator).
 - **L2 episodes** (no LLM): events are grouped into "sessions of related work" by project (git repo
-  / containing folder for notes, PDFs, and images) and time gap — a new episode starts when
-  consecutive events in a project are more than `CMRAG_EPISODE_GAP_HOURS` apart (default 24). A folder
-  mixing notes, PDFs, and screenshots forms one cross-modal episode. Each episode links to its members.
+/ containing folder for notes, PDFs, and images) and time gap — a new episode starts when
+consecutive events in a project are more than `CMRAG_EPISODE_GAP_HOURS` apart (default 24). A folder
+mixing notes, PDFs, and screenshots forms one cross-modal episode. Each episode links to its members.
 - **L3 concepts** (requires the `[embeddings]` extra; LLM naming optional): events are clustered by
-  semantic similarity (cosine ≥ `CMRAG_CONCEPT_SIM_THRESHOLD`, default 0.60) into recurring topics
-  that span episodes. Each new concept is named by the local LLM (`CMRAG_EXTRACT_MODEL`, temp 0)
-  with a deterministic fallback when Ollama is unavailable.
+semantic similarity (cosine ≥ `CMRAG_CONCEPT_SIM_THRESHOLD`, default 0.60) into recurring topics
+that span episodes. Each new concept is named by the local LLM (`CMRAG_EXTRACT_MODEL`, temp 0)
+with a deterministic fallback when Ollama is unavailable.
 - **Graph** (no LLM/embeddings): computes PageRank **centrality** per node (an importance signal
-  stored on each node) and **concept co-occurrence** links — two concepts get a `relates_to` edge
-  (weighted by shared-episode count) when they have events in the same episode.
+stored on each node) and **concept co-occurrence** links — two concepts get a `relates_to` edge
+(weighted by shared-episode count) when they have events in the same episode.
 - **Drift** (no LLM; needs the `[embeddings]` extra): buckets each concept's member events into
-  time windows and scores how the concept's prototype (centroid) **moved** between windows; surfaced
-  via `mem drift`. See the `mem drift` bullet above.
+time windows and scores how the concept's prototype (centroid) **moved** between windows; surfaced
+via `mem drift`. See the `mem drift` bullet above.
 - **Distill** (needs the `[embeddings]` extra; LLM summary optional): derives a compact,
-  retrieval-preserving stand-in for each L2/L3 node — a short summary (+ its embedding) and a
-  **minimal subset of the node's real L0 evidence chunks** (the most representative ones, sized to
-  `CMRAG_DISTILL_COMPRESSION_RATIO`). This is a research/measurement feature: it does **not** change
-  `mem ask` ranking. Whether a distilled stand-in is good enough to adopt is decided by
-  `scripts/distill_gate.py` (below), not by default. Provenance is preserved — the kept chunks are a
-  real subset, never a generated paraphrase.
+retrieval-preserving stand-in for each L2/L3 node — a short summary (+ its embedding) and a
+**minimal subset of the node's real L0 evidence chunks** (the most representative ones, sized to
+`CMRAG_DISTILL_COMPRESSION_RATIO`). This is a research/measurement feature: it does **not** change
+`mem ask` ranking. Whether a distilled stand-in is good enough to adopt is decided by
+`scripts/distill_gate.py` (below), not by default. Provenance is preserved — the kept chunks are a
+real subset, never a generated paraphrase.
 
 Every higher-level node drills down to its L0 evidence through its members.
 
@@ -456,16 +464,16 @@ Use `mem seed-sample` to create a tiny deterministic sample vault + sample git r
 - Writes to a separate temp sample DB by default (does not modify your main `./data/memory.db`)
 - Seeds synthetic markdown notes and git commits (no personal data)
 - Populates namespaced sample rows in `queries_eval`: `[sample]` single-source specific-fact
-  queries (incl. one negative/abstain case), `[sample-synth]` multi-source synthesis queries, `[sample-xmodal-text]` / `[sample-xmodal-visual]` cross-modal slices, and a `[sample-drift]` slice — a deliberately drifting "chunking" concept
-  (two notes whose approach shifts across time windows) plus a stable provenance control
+queries (incl. one negative/abstain case), `[sample-synth]` multi-source synthesis queries, `[sample-xmodal-text]` / `[sample-xmodal-visual]` cross-modal slices, and a `[sample-drift]` slice — a deliberately drifting "chunking" concept
+(two notes whose approach shifts across time windows) plus a stable provenance control
 - Materializes tiny synthetic cross-modal fixtures (a 1-page PDF + two PNGs) under the sample vault.
-  The PDF is ingested when the `[pdf]` extra is present and the images when `[ocr]` (+ tesseract) is
-  present; otherwise those slices stay at a ~0 baseline. The two slices are designed so an
-  OCR/PDF-text-first strategy answers the *text-heavy* slice but fails the *visual-heavy* one (a
-  layout/colour-only diagram) — the gap the pre-committed native-embedding gate measures. Read the
-  gate **semantically** (it compares against semantic image embeddings):
-  `mem reindex-embeddings` first, then `python scripts/xmodal_gate.py` (it warns if no vectors are
-  stored). Regenerate the fixtures with `scripts/generate_xmodal_fixtures.py`.
+The PDF is ingested when the `[pdf]` extra is present and the images when `[ocr]` (+ tesseract) is
+present; otherwise those slices stay at a ~0 baseline. The two slices are designed so an
+OCR/PDF-text-first strategy answers the *text-heavy* slice but fails the *visual-heavy* one (a
+layout/colour-only diagram) — the gap the pre-committed native-embedding gate measures. Read the
+gate **semantically** (it compares against semantic image embeddings):
+`mem reindex-embeddings` first, then `python scripts/xmodal_gate.py` (it warns if no vectors are
+stored). Regenerate the fixtures with `scripts/generate_xmodal_fixtures.py`.
 - Safe to re-run; unchanged content is reused and ingestion remains idempotent
 
 Run the sample retrieval benchmark:
@@ -535,3 +543,10 @@ Use a JSON array of rows:
 ```
 
 `mem eval --load-queries file.json` upserts rows into `queries_eval` and then runs metrics (`Recall@K`, `MRR@K`, and an approximate citation hit-rate based on the top retrieved source).
+
+Loading also **validates** each `expected_source_uris` entry and prints a warning to stderr (never
+failing the load) for gold URIs that would silently break exact-match scoring: a doubled path
+segment (e.g. `//Users/...`), a non-absolute path that isn't a `scheme://` URI, or a URI that
+matches no ingested source (this last check is skipped when the DB has no sources yet, since a
+query file may legitimately predate ingestion). Warnings go to stderr so `--json` output stays a
+clean contract.

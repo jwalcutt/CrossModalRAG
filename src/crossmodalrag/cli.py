@@ -291,7 +291,19 @@ def eval_cmd(
         init_db(conn)
         loaded = 0
         if load_queries_path is not None:
+            from crossmodalrag.evaluation import validate_eval_queries
+
             queries = load_eval_queries_file(load_queries_path)
+            known_uris = {
+                str(row["source_uri"])
+                for row in conn.execute("SELECT DISTINCT source_uri FROM sources").fetchall()
+            }
+            for warning in validate_eval_queries(queries, known_source_uris=known_uris):
+                print(
+                    f"warning: eval row #{warning.row} ({warning.query_text!r}): "
+                    f"{warning.issue} uri {warning.uri!r}",
+                    file=sys.stderr,
+                )
             loaded = upsert_eval_queries(conn, queries)
         summary = run_eval(
             conn,
