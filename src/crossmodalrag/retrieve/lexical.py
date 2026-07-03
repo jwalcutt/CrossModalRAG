@@ -92,7 +92,8 @@ def retrieve(
     # Local import avoids a circular import (rerank imports from this module).
     from crossmodalrag.retrieve.rerank import dedupe_hits
 
-    return dedupe_hits(scored)[:top_k]
+    # max_kept bounds dedupe to O(top_k * n) over the full scored pool (see hybrid.retrieve).
+    return dedupe_hits(scored, max_kept=top_k)
 
 
 def tokenize(text: str) -> list[str]:

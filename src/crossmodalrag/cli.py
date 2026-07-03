@@ -4,6 +4,7 @@ import argparse
 import json
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 from crossmodalrag.config import (
@@ -174,6 +175,7 @@ def ask_cmd(
     db_path = get_db_path()
     # Usage tracking is opt-in: off unless enabled by env / --track / --accept, and never by --no-track.
     track_enabled = False if track is False else (bool(track) or accept or usage_tracking_enabled())
+    ask_start = time.monotonic()
     conn = connect(db_path)
     try:
         hits, matched_nodes = retrieve_for_answer(
@@ -203,7 +205,7 @@ def ask_cmd(
             provider = None
         else:
             if as_json:
-                data = generated_answer_to_dict(gen)
+                data = generated_answer_to_dict(gen, total_seconds=time.monotonic() - ask_start)
                 if matched_payload:
                     data["matched_nodes"] = matched_payload
                 print(json.dumps(data, indent=2))
@@ -222,7 +224,7 @@ def ask_cmd(
 
     # No LLM (disabled or unavailable): deterministic evidence template.
     if as_json:
-        data = template_answer_to_dict(query, hits)
+        data = template_answer_to_dict(query, hits, total_seconds=time.monotonic() - ask_start)
         if matched_payload:
             data["matched_nodes"] = matched_payload
         print(json.dumps(data, indent=2))

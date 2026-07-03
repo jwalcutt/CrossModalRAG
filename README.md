@@ -221,7 +221,9 @@ provenance holds regardless of entry level. Memory-level retrieval needs the hie
 embeddings extra it ranks nodes lexically.
 - `--explain` prints per-hit score components.
 - `--no-llm` skips synthesis and returns the deterministic evidence template.
-- `--json` emits a structured answer (stable contract for UIs; includes `matched_nodes` at memory levels).
+- `--json` emits a structured answer (stable contract for UIs; includes `matched_nodes` at memory
+levels, plus a `timing` block — `total_seconds` for the whole ask and `generation_seconds` for the
+LLM call alone — so latency is measurable per answer).
 Each evidence entry also carries cross-modal provenance: `modality`, a rendered `locator`
 (e.g. `spec.pdf p.4`), and `page` / `ocr_confidence` when applicable (additive; existing fields
 unchanged).
@@ -510,6 +512,9 @@ export CMRAG_LLM_PROVIDER=ollama
 export CMRAG_LLM_MODEL=gemma4              # swap for any model you have in `ollama list`
 export CMRAG_LLM_BASE_URL=http://localhost:11434
 export CMRAG_LLM_TIMEOUT=120
+export CMRAG_LLM_KEEP_ALIVE=30m            # keep the model loaded between calls ("30m", "1h",
+                                           # seconds, or -1 = until Ollama exits); cold-loads
+                                           # dominate tail latency
 export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval score
 export CMRAG_EXTRACT_MODEL=llama3.2        # model for `mem build-memory` event extraction
 export CMRAG_EPISODE_GAP_HOURS=24          # L2 episode session gap (deterministic, no LLM)

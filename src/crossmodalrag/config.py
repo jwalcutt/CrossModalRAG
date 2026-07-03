@@ -47,6 +47,23 @@ def get_llm_timeout() -> float:
         return 120.0
 
 
+def get_llm_keep_alive() -> float | str:
+    """How long Ollama keeps the synthesis model loaded after a call. Default "30m".
+
+    Cold-loading the model between calls dominated tail latency (30 s vs 18 min for
+    near-identical prompts), so requests pin it for a while by default. Accepts an
+    Ollama duration string ("30m", "1h"), a number of seconds, or -1 to keep the
+    model loaded until Ollama shuts down.
+    """
+    raw = os.getenv("CMRAG_LLM_KEEP_ALIVE", "30m").strip()
+    if not raw:
+        return "30m"
+    try:
+        return float(raw)
+    except ValueError:
+        return raw
+
+
 def get_extract_model() -> str:
     return os.getenv("CMRAG_EXTRACT_MODEL", "llama3.2").strip() or "llama3.2"
 

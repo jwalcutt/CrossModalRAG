@@ -7,6 +7,7 @@ from typing import Protocol, runtime_checkable
 
 from crossmodalrag.config import (
     get_llm_base_url,
+    get_llm_keep_alive,
     get_llm_model,
     get_llm_provider_name,
     get_llm_timeout,
@@ -37,16 +38,21 @@ class OllamaProvider:
         model: str | None = None,
         base_url: str | None = None,
         timeout: float | None = None,
+        keep_alive: float | str | None = None,
     ) -> None:
         self.name = model or get_llm_model()
         self.base_url = (base_url or get_llm_base_url()).rstrip("/")
         self.timeout = timeout if timeout is not None else get_llm_timeout()
+        self.keep_alive = keep_alive if keep_alive is not None else get_llm_keep_alive()
 
     def generate(self, prompt: str, system: str | None = None) -> str:
         payload: dict[str, object] = {
             "model": self.name,
             "prompt": prompt,
             "stream": False,
+            # Keep the model resident between calls: cold-loading it dominated
+            # tail latency (30 s vs 18 min for near-identical prompts).
+            "keep_alive": self.keep_alive,
             "options": {"temperature": 0},
         }
         if system:

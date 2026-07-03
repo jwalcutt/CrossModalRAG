@@ -100,13 +100,22 @@ def format_generated_answer(gen: GeneratedAnswer, explain: bool = False, debug: 
     return "\n".join(lines)
 
 
-def generated_answer_to_dict(gen: GeneratedAnswer) -> dict:
-    """Stable JSON contract for `mem ask --json`. Keep field names backward-compatible."""
+def generated_answer_to_dict(gen: GeneratedAnswer, *, total_seconds: float | None = None) -> dict:
+    """Stable JSON contract for `mem ask --json`. Keep field names backward-compatible.
+
+    ``total_seconds`` is the caller-measured wall clock for the whole ask
+    (retrieval + synthesis); ``generation_seconds`` is the LLM call alone.
+    Additive `timing` block — existing keys are unchanged.
+    """
     return {
         "query": gen.query,
         "model": gen.model,
         "abstained": gen.abstained,
         "answer": gen.answer_text,
+        "timing": {
+            "total_seconds": _round_seconds(total_seconds),
+            "generation_seconds": _round_seconds(gen.generation_seconds),
+        },
         "cited_evidence_ids": list(gen.cited_evidence_ids),
         "invalid_citations": list(gen.invalid_citations),
         "evidence": [
@@ -137,7 +146,9 @@ def generated_answer_to_dict(gen: GeneratedAnswer) -> dict:
     }
 
 
-def template_answer_to_dict(query: str, hits: list[RetrievalHit]) -> dict:
+def template_answer_to_dict(
+    query: str, hits: list[RetrievalHit], *, total_seconds: float | None = None
+) -> dict:
     """No-LLM evidence-template payload (same shape `mem ask --no-llm --json` emits).
 
     The deterministic counterpart to ``generated_answer_to_dict``: lists the retrieved evidence with
@@ -148,6 +159,10 @@ def template_answer_to_dict(query: str, hits: list[RetrievalHit]) -> dict:
         "model": None,
         "abstained": not hits,
         "answer": None,
+        "timing": {
+            "total_seconds": _round_seconds(total_seconds),
+            "generation_seconds": None,
+        },
         "evidence": [
             {
                 "evidence_id": f"E{i}",
@@ -171,6 +186,10 @@ def template_answer_to_dict(query: str, hits: list[RetrievalHit]) -> dict:
             for i, hit in enumerate(hits, start=1)
         ],
     }
+
+
+def _round_seconds(value: float | None) -> float | None:
+    return round(value, 3) if value is not None else None
 
 
 def _modality_of(hit: RetrievalHit) -> str | None:

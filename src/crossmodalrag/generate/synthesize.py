@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 
 from crossmodalrag.config import get_min_evidence_score
@@ -37,6 +38,10 @@ class GeneratedAnswer:
     raw_prompt: str = ""
     raw_output: str = ""
     id_map: dict[str, RetrievalHit] = field(default_factory=dict)
+    # Wall-clock seconds spent inside the LLM call (0.0 when the gate abstained
+    # before calling it). Surfaced via the `timing` JSON block so latency
+    # regressions are measurable rather than anecdotal.
+    generation_seconds: float = 0.0
 
 
 def build_evidence_prompt(
@@ -102,7 +107,9 @@ def synthesize_answer(
         )
 
     system, prompt, id_map = build_evidence_prompt(query, hits)
+    generation_start = time.monotonic()
     raw_output = provider.generate(prompt, system=system)
+    generation_seconds = time.monotonic() - generation_start
 
     cited = parse_citations(raw_output)
     valid = [eid for eid in cited if eid in id_map]
@@ -120,4 +127,5 @@ def synthesize_answer(
         raw_prompt=prompt,
         raw_output=raw_output,
         id_map=id_map,
+        generation_seconds=generation_seconds,
     )

@@ -54,20 +54,27 @@ def get_dedupe_threshold() -> float:
 
 
 def dedupe_hits(
-    hits: list[RetrievalHit], threshold: float | None = None
+    hits: list[RetrievalHit], threshold: float | None = None, max_kept: int | None = None
 ) -> list[RetrievalHit]:
     """Drop near-identical duplicate evidence, keeping the higher-scored hit.
 
     Collapses the same content re-ingested across modalities (e.g. a screenshot of
     a note alongside the note). ``hits`` must already be score-sorted (descending);
     a candidate is dropped when its token overlap with an already-kept hit is
-    ``>= threshold`` (conservative default 0.95). O(kept * n) over the candidate pool.
+    ``>= threshold`` (conservative default 0.95).
+
+    ``max_kept`` stops the scan once that many hits survive. Because hits are
+    processed in score order, the result is identical to deduping everything and
+    slicing — but bounds the work to O(max_kept * n) instead of O(n^2), which
+    matters when the caller passes the full scored candidate pool.
     """
     if threshold is None:
         threshold = get_dedupe_threshold()
     kept: list[RetrievalHit] = []
     kept_tokens: list[list[str]] = []
     for hit in hits:
+        if max_kept is not None and len(kept) >= max_kept:
+            break
         tokens = tokenize(hit.chunk_text)
         if any(lexical_overlap_score(tokens, kt) >= threshold for kt in kept_tokens):
             continue

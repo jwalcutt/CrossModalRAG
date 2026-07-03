@@ -140,3 +140,28 @@ def test_dedupe_keeps_distinct_evidence():
     kept = dedupe_hits(hits, threshold=0.95)
 
     assert [h.chunk_id for h in kept] == [1, 2]
+
+
+def test_dedupe_max_kept_equals_full_dedupe_then_slice():
+    # A pool with duplicates interleaved: early stop must yield exactly the same
+    # top slice as deduping everything and slicing afterwards.
+    dup = "identical duplicated content shared across two modalities exactly"
+    hits = [
+        _hit(1, "note", dup, 0.9),
+        _hit(2, "image", dup, 0.8),  # near-duplicate of #1 — dropped either way
+        _hit(3, "pdf", "unique alpha beta gamma", 0.7),
+        _hit(4, "note", "unique delta epsilon zeta", 0.6),
+        _hit(5, "git_commit", "unique eta theta iota", 0.5),
+    ]
+
+    for k in (1, 2, 3, 5):
+        assert dedupe_hits(hits, threshold=0.95, max_kept=k) == dedupe_hits(
+            hits, threshold=0.95
+        )[:k]
+
+
+def test_dedupe_max_kept_stops_scanning_after_quota():
+    hits = [_hit(i, "note", f"unique text {i} tokens {i * 7}", 1.0 - i * 0.01) for i in range(50)]
+    kept = dedupe_hits(hits, threshold=0.95, max_kept=5)
+    assert len(kept) == 5
+    assert [h.chunk_id for h in kept] == [0, 1, 2, 3, 4]

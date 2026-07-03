@@ -8,6 +8,7 @@ contracts, adding no retrieval/derivation logic of its own.
 from __future__ import annotations
 
 import sqlite3
+import time
 
 from crossmodalrag.config import (
     CONNECTOR_ENV_PREFIX,
@@ -98,6 +99,7 @@ def answer_payload(
     Synthesizes a grounded answer when the LLM is available, else returns the deterministic evidence
     template. Either way the payload carries provenance for each evidence item.
     """
+    start = time.monotonic()
     hits, matched_nodes = retrieve_for_answer(
         conn, query=query, top_k=top_k, profile=profile, level=level, modalities=modalities
     )
@@ -108,12 +110,12 @@ def answer_payload(
         except LLMUnavailable:
             provider = None
         else:
-            data = generated_answer_to_dict(gen)
+            data = generated_answer_to_dict(gen, total_seconds=time.monotonic() - start)
             if matched_nodes:
                 data["matched_nodes"] = matched_nodes_payload(matched_nodes)
             return data
 
-    data = template_answer_to_dict(query, hits)
+    data = template_answer_to_dict(query, hits, total_seconds=time.monotonic() - start)
     if matched_nodes:
         data["matched_nodes"] = matched_nodes_payload(matched_nodes)
     return data

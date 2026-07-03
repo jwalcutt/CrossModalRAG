@@ -146,4 +146,6 @@ def retrieve(
     hits.sort(key=lambda hit: hit.score, reverse=True)
     from crossmodalrag.retrieve.rerank import dedupe_hits
 
-    return dedupe_hits(hits)[:top_k]
+    # max_kept bounds dedupe to O(top_k * n): the candidate pool here is every chunk
+    # with any signal, and unbounded pairwise dedupe over it dominated ask latency.
+    return dedupe_hits(hits, max_kept=top_k)
