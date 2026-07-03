@@ -69,12 +69,19 @@ def test_cli_parser_accepts_seed_sample_command() -> None:
 def test_seed_sample_command_uses_separate_default_temp_db(tmp_path: Path, monkeypatch) -> None:
     main_db = tmp_path / "main-memory.db"
     monkeypatch.setenv("CMRAG_DB_PATH", str(main_db))
+    # Redirect the "default temp" location into this test's tmp dir: seeding the *real*
+    # shared sample DB from tests pollutes it across pytest runs with stale-URI sources
+    # (its eval gold ends up pointing at deleted pytest workspaces → 0.0 recall).
+    import crossmodalrag.sample_data as sample_data_mod
+
+    monkeypatch.setattr(sample_data_mod.tempfile, "gettempdir", lambda: str(tmp_path))
 
     workspace_dir = tmp_path / "sample-workspace"
     seed_sample_cmd(workspace_dir=workspace_dir, force=True)
 
     assert not main_db.exists()
     assert default_sample_db_path().exists()
+    assert default_sample_db_path().is_relative_to(tmp_path)
 
 
 def test_purge_seeded_sample_data_removes_only_sample_rows(tmp_path: Path) -> None:

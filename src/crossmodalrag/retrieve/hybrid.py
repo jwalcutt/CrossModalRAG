@@ -64,6 +64,14 @@ def retrieve(
     w_vec, w_lex, w_rec, w_usage = PROFILE_WEIGHTS[profile]
     now = now or datetime.now(timezone.utc)
 
+    # Title boost: a small additive bonus for query overlap with the source *title*,
+    # profile-independent (a note named for the query's terms should win near-ties
+    # against incidental mentions in diffs). 0 disables it.
+    from crossmodalrag.config import get_title_boost_weight
+
+    w_title = get_title_boost_weight()
+    title_tokens_cache: dict[str, list[str]] = {}
+
     # Usage (rehearsal strength) is loaded only when the profile asks for it (opt-in).
     usage_strengths: dict[int, float] = {}
     if w_usage > 0:
@@ -123,7 +131,14 @@ def retrieve(
             usage_norm = normalize_strength(
                 usage_strengths.get(chunk_id, 0.0), saturation=get_usage_saturation()
             )
-        score = (w_vec * vec_norm) + (w_lex * lex) + (w_rec * recency) + (w_usage * usage_norm)
+        title_lex = lexical.title_overlap(query_tokens, row["title"], title_tokens_cache)
+        score = (
+            (w_vec * vec_norm)
+            + (w_lex * lex)
+            + (w_rec * recency)
+            + (w_usage * usage_norm)
+            + (w_title * title_lex)
+        )
         hits.append(
             RetrievalHit(
                 chunk_id=chunk_id,
@@ -140,6 +155,7 @@ def retrieve(
                 vector_score=vec_norm,
                 chunk_metadata_json=row["chunk_metadata_json"],
                 usage_score=usage_norm,
+                title_score=title_lex,
             )
         )
 

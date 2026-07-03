@@ -145,6 +145,21 @@ def get_distill_compression_ratio() -> float:
     return value if 0 < value <= 1.0 else 0.5
 
 
+def get_title_boost_weight() -> float:
+    """Additive bonus weight for query-token overlap with the source *title*. Default 0.05.
+
+    Small by design: it re-orders near-ties in favor of sources literally named for
+    the query's terms (a note titled "Fourier Transform" over an incidental mention
+    in a diff) without overriding semantic relevance. 0 disables the boost.
+    """
+    raw = os.getenv("CMRAG_TITLE_BOOST_WEIGHT", "0.05").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.05
+    return value if value >= 0 else 0.05
+
+
 def get_min_evidence_score() -> float:
     raw = os.getenv("CMRAG_MIN_EVIDENCE_SCORE", "0.15").strip()
     try:

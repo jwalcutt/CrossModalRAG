@@ -223,7 +223,12 @@ then drills them down to their L0 evidence and answers grounded in (and citing) 
 provenance holds regardless of entry level. Memory-level retrieval needs the hierarchy built
 (`mem build-memory`) and benefits from node embeddings (`mem reindex-embeddings`); without the
 embeddings extra it ranks nodes lexically.
-- `--explain` prints per-hit score components.
+- `--explain` prints per-hit score components (vector / lexical / recency / usage / title).
+Ranking includes a small additive **title boost** (`CMRAG_TITLE_BOOST_WEIGHT`, default 0.05;
+0 disables): query-term overlap with the source *title*, so a note literally named for the
+query's terms wins near-ties against incidental mentions in commit diffs. Lexical matching
+also treats underscore notation and its plain spelling as equivalent (a note's `F_1`
+matches a query's `f1`).
 - `--no-llm` skips synthesis and returns the deterministic evidence template.
 - `--json` emits a structured answer (stable contract for UIs; includes `matched_nodes` at memory
 levels, plus a `timing` block — `total_seconds` for the whole ask and `generation_seconds` for the

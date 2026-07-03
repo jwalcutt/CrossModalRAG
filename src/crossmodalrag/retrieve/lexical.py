@@ -27,6 +27,7 @@ class RetrievalHit:
     vector_score: float = 0.0
     chunk_metadata_json: str | None = None
     usage_score: float = 0.0
+    title_score: float = 0.0
 
 
 def retrieve(
@@ -57,6 +58,11 @@ def retrieve(
         """
     ).fetchall()
 
+    from crossmodalrag.config import get_title_boost_weight
+
+    w_title = get_title_boost_weight()
+    title_tokens_cache: dict[str, list[str]] = {}
+
     now = datetime.now(timezone.utc)
     scored: list[RetrievalHit] = []
     for row in rows:
@@ -70,7 +76,8 @@ def retrieve(
             continue
 
         recency = recency_score(row["source_timestamp"], now=now)
-        score = (0.85 * lex) + (0.15 * recency)
+        title_lex = title_overlap(query_tokens, row["title"], title_tokens_cache)
+        score = (0.85 * lex) + (0.15 * recency) + (w_title * title_lex)
         scored.append(
             RetrievalHit(
                 chunk_id=int(row["chunk_id"]),
@@ -85,6 +92,7 @@ def retrieve(
                 lexical_score=lex,
                 recency_score=recency,
                 chunk_metadata_json=row["chunk_metadata_json"],
+                title_score=title_lex,
             )
         )
 
@@ -96,8 +104,36 @@ def retrieve(
     return dedupe_hits(scored, max_kept=top_k)
 
 
+def title_overlap(
+    query_tokens: list[str], title: object, cache: dict[str, list[str]]
+) -> float:
+    """Query overlap with the source title (cached per title — titles repeat per source)."""
+    if not title:
+        return 0.0
+    key = str(title)
+    tokens = cache.get(key)
+    if tokens is None:
+        tokens = tokenize(key)
+        cache[key] = tokens
+    return lexical_overlap_score(query_tokens, tokens)
+
+
 def tokenize(text: str) -> list[str]:
-    return [m.group(0).lower() for m in WORD_RE.finditer(text)]
+    """Lowercased word tokens; underscore-bearing tokens also emit a squashed variant.
+
+    The variant lets math/code notation match its plain spelling across the
+    query/document boundary (a note's ``F_1`` vs a query's ``f1``) — both sides
+    tokenize identically, so matching stays symmetric.
+    """
+    tokens: list[str] = []
+    for m in WORD_RE.finditer(text):
+        tok = m.group(0).lower()
+        tokens.append(tok)
+        if "_" in tok:
+            squashed = tok.replace("_", "")
+            if squashed:
+                tokens.append(squashed)
+    return tokens
 
 
 def lexical_overlap_score(query_tokens: list[str], doc_tokens: list[str]) -> float:
