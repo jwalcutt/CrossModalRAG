@@ -65,29 +65,73 @@ export interface MemoryStats {
   integrity: { unsupported_count: number; unsupported_ids: number[]; dangling_count: number; dangling_ids: number[] };
 }
 
-async function get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+function buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
   const url = new URL(path, window.location.origin);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
     }
   }
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
-    try {
-      const body = await res.json();
-      if (body?.detail) detail = String(body.detail);
-    } catch { /* non-JSON error */ }
-    throw new Error(detail);
-  }
+  return url.toString();
+}
+
+async function throwHttpError(res: Response): Promise<never> {
+  let detail = `${res.status} ${res.statusText}`;
+  try {
+    const body = await res.json();
+    if (body?.detail) detail = String(body.detail);
+  } catch { /* non-JSON error */ }
+  throw new Error(detail);
+}
+
+async function get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  const res = await fetch(buildUrl(path, params));
+  if (!res.ok) await throwHttpError(res);
   return res.json() as Promise<T>;
+}
+
+type AskOpts = { profile?: string; level?: string; top_k?: number; use_llm?: boolean };
+type StreamEvent = { type: "token"; text: string } | { type: "answer"; data: AnswerPayload };
+
+// NDJSON stream from `/ask/stream`: token events fire `onToken` as the LLM generates;
+// the final `answer` event carries the exact `/ask` payload and always arrives.
+async function askStream(q: string, opts: AskOpts, onToken: (text: string) => void): Promise<AnswerPayload> {
+  const res = await fetch(buildUrl("/ask/stream", { q, ...opts }));
+  if (!res.ok) await throwHttpError(res);
+  if (!res.body) return get<AnswerPayload>("/ask", { q, ...opts }); // no ReadableStream support
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let final: AnswerPayload | null = null;
+
+  const handleLine = (line: string) => {
+    if (!line) return;
+    const event = JSON.parse(line) as StreamEvent;
+    if (event.type === "token") onToken(event.text);
+    else if (event.type === "answer") final = event.data;
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      handleLine(buffer.slice(0, nl).trim());
+      buffer = buffer.slice(nl + 1);
+    }
+  }
+  handleLine(buffer.trim()); // stream ended without a trailing newline
+
+  if (!final) throw new Error("Answer stream ended without a final answer event.");
+  return final;
 }
 
 export const api = {
   health: () => get<Health>("/health"),
-  ask: (q: string, opts: { profile?: string; level?: string; top_k?: number; use_llm?: boolean }) =>
-    get<AnswerPayload>("/ask", { q, ...opts }),
+  ask: (q: string, opts: AskOpts) => get<AnswerPayload>("/ask", { q, ...opts }),
+  askStream,
   concepts: (top = 40) => get<{ concepts: ConceptView[] }>("/concepts", { top }),
   timeline: (limit = 80) => get<{ timeline: EpisodeView[] }>("/timeline", { limit }),
   memoryStats: () => get<MemoryStats>("/memory-stats"),

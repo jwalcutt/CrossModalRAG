@@ -116,6 +116,45 @@ def test_ask_offline_template(client):
         assert "source_uri" in body["evidence"][0] and "locator" in body["evidence"][0]
 
 
+def test_ask_stream_no_llm_emits_single_answer_event(client):
+    with client.stream("GET", "/ask/stream", params={"q": "parser", "use_llm": "false"}) as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/x-ndjson")
+        events = [json.loads(line) for line in r.iter_lines() if line]
+    assert [e["type"] for e in events] == ["answer"]
+    assert set(events[0]["data"]) >= {"query", "model", "abstained", "answer", "evidence"}
+
+
+def test_ask_stream_tokens_then_final_answer_matches_ask(client, monkeypatch):
+    import crossmodalrag.service as svc
+
+    class _StreamStub:
+        name = "stub-stream"
+
+        def generate(self, prompt, system=None):
+            return "Grounded answer [E1]."
+
+        def generate_stream(self, prompt, system=None):
+            yield "Grounded "
+            yield "answer [E1]."
+
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    monkeypatch.setattr(svc, "get_default_llm_provider", lambda: _StreamStub())
+
+    with client.stream("GET", "/ask/stream", params={"q": "parser"}) as r:
+        assert r.status_code == 200
+        events = [json.loads(line) for line in r.iter_lines() if line]
+
+    assert [e["type"] for e in events] == ["token", "token", "answer"]
+    assert "".join(e["text"] for e in events[:-1]) == "Grounded answer [E1]."
+
+    # The final event carries the exact /ask contract (timing wall-clock aside).
+    buffered = client.get("/ask", params={"q": "parser"}).json()
+    final = events[-1]["data"]
+    final.pop("timing"), buffered.pop("timing")
+    assert final == buffered
+
+
 def test_bad_level_is_400(client):
     assert client.get("/forgetting", params={"level": "nonsense"}).status_code == 400
 

@@ -406,9 +406,15 @@ each returns exactly the corresponding `--json` payload. The web console is serv
 API docs are at `/docs`. Use `--host`/`--port` to change the bind; binding to a non-loopback `--host`
 exposes the unauthenticated API on your network and is warned against.
 
+`/ask/stream` is the streaming variant of `/ask` (the console's Ask view uses it when synthesis is
+on): NDJSON events — `{"type":"token","text":…}` per generated fragment, then one final
+`{"type":"answer","data":…}` carrying the exact `/ask` payload (citations validated on the full
+output; the final event always arrives, including on abstention or LLM failure).
+
 ```bash
 curl -s localhost:8765/health
 curl -s "localhost:8765/ask?q=why+did+I+change+the+parser&use_llm=true"
+curl -sN "localhost:8765/ask/stream?q=why+did+I+change+the+parser"   # NDJSON token stream
 ```
 
 The web console is a React app under `web/`, built to `src/crossmodalrag/api/static/` (committed, so

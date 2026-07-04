@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 
 from crossmodalrag.config import get_min_evidence_score
@@ -98,52 +98,41 @@ def parse_citations(text: str) -> list[str]:
     return ordered
 
 
-def synthesize_answer(
-    query: str,
-    hits: list[RetrievalHit],
-    provider: LLMProvider,
-    min_evidence_score: float | None = None,
-    on_token: Callable[[str], None] | None = None,
-) -> GeneratedAnswer:
-    """Generate an evidence-constrained answer, abstaining when evidence is weak.
+def _gate_abstention(
+    query: str, hits: list[RetrievalHit], provider: LLMProvider, min_evidence_score: float | None
+) -> GeneratedAnswer | None:
+    """The weak-retrieval gate: an abstention BEFORE calling the LLM, or None to proceed.
 
-    The weak-retrieval gate short-circuits BEFORE calling the LLM when there are
-    no hits or the top hit scores below the threshold, preventing ungrounded
-    speculation (provenance-first / explicit-uncertainty non-negotiables).
-
-    Pass ``on_token`` to observe text fragments as the LLM produces them
-    (via ``provider.generate_stream``); the library stays UI-agnostic, so
-    callers own any display. Citations/abstention are still computed from the
-    accumulated full output, and the returned ``GeneratedAnswer`` is identical
-    to the buffered path. The gate abstains before the LLM, so ``on_token``
-    never fires for weak-retrieval abstentions.
+    Short-circuiting when there are no hits or the top hit scores below the
+    threshold prevents ungrounded speculation (provenance-first /
+    explicit-uncertainty non-negotiables).
     """
     threshold = min_evidence_score if min_evidence_score is not None else get_min_evidence_score()
     top_score = hits[0].score if hits else 0.0
-    if not hits or top_score < threshold:
-        return GeneratedAnswer(
-            query=query,
-            answer_text=INSUFFICIENT_EVIDENCE_TEXT,
-            cited_evidence_ids=[],
-            invalid_citations=[],
-            evidence=hits,
-            abstained=True,
-            model=provider.name,
-            abstention_reason=ABSTAIN_WEAK_RETRIEVAL,
-        )
+    if hits and top_score >= threshold:
+        return None
+    return GeneratedAnswer(
+        query=query,
+        answer_text=INSUFFICIENT_EVIDENCE_TEXT,
+        cited_evidence_ids=[],
+        invalid_citations=[],
+        evidence=hits,
+        abstained=True,
+        model=provider.name,
+        abstention_reason=ABSTAIN_WEAK_RETRIEVAL,
+    )
 
-    system, prompt, id_map = build_evidence_prompt(query, hits)
-    generation_start = time.monotonic()
-    if on_token is not None:
-        fragments: list[str] = []
-        for fragment in provider.generate_stream(prompt, system=system):
-            fragments.append(fragment)
-            on_token(fragment)
-        raw_output = "".join(fragments).strip()
-    else:
-        raw_output = provider.generate(prompt, system=system)
-    generation_seconds = time.monotonic() - generation_start
 
+def _finalize_answer(
+    query: str,
+    hits: list[RetrievalHit],
+    provider: LLMProvider,
+    raw_output: str,
+    prompt: str,
+    id_map: dict[str, RetrievalHit],
+    generation_seconds: float,
+) -> GeneratedAnswer:
+    """Citation validation + abstention detection over the complete model output."""
     cited = parse_citations(raw_output)
     valid = [eid for eid in cited if eid in id_map]
     invalid = [eid for eid in cited if eid not in id_map]
@@ -163,3 +152,67 @@ def synthesize_answer(
         generation_seconds=generation_seconds,
         abstention_reason=ABSTAIN_LLM_INSUFFICIENT if abstained else None,
     )
+
+
+def synthesize_answer_stream(
+    query: str,
+    hits: list[RetrievalHit],
+    provider: LLMProvider,
+    min_evidence_score: float | None = None,
+) -> Generator[str, None, GeneratedAnswer]:
+    """Streaming variant of :func:`synthesize_answer`: yields text fragments as the
+    LLM produces them, then returns the finished ``GeneratedAnswer`` as the
+    generator's return value (``StopIteration.value``).
+
+    Citations/abstention are computed from the accumulated full output, so the
+    returned answer is identical to the buffered path. The weak-retrieval gate
+    abstains before the LLM, so a gated call yields no fragments. The library
+    stays UI-agnostic — callers own any display of the fragments.
+    """
+    gated = _gate_abstention(query, hits, provider, min_evidence_score)
+    if gated is not None:
+        return gated
+
+    system, prompt, id_map = build_evidence_prompt(query, hits)
+    generation_start = time.monotonic()
+    fragments: list[str] = []
+    for fragment in provider.generate_stream(prompt, system=system):
+        fragments.append(fragment)
+        yield fragment
+    raw_output = "".join(fragments).strip()
+    generation_seconds = time.monotonic() - generation_start
+    return _finalize_answer(query, hits, provider, raw_output, prompt, id_map, generation_seconds)
+
+
+def synthesize_answer(
+    query: str,
+    hits: list[RetrievalHit],
+    provider: LLMProvider,
+    min_evidence_score: float | None = None,
+    on_token: Callable[[str], None] | None = None,
+) -> GeneratedAnswer:
+    """Generate an evidence-constrained answer, abstaining when evidence is weak.
+
+    Pass ``on_token`` to observe text fragments as the LLM produces them (via
+    ``provider.generate_stream``); without it, the provider's buffered
+    ``generate`` is used. Either way the ``GeneratedAnswer`` is built from the
+    complete output, and ``on_token`` never fires for gate abstentions.
+    """
+    if on_token is not None:
+        stream = synthesize_answer_stream(query, hits, provider, min_evidence_score)
+        while True:
+            try:
+                fragment = next(stream)
+            except StopIteration as stop:
+                return stop.value
+            on_token(fragment)
+
+    gated = _gate_abstention(query, hits, provider, min_evidence_score)
+    if gated is not None:
+        return gated
+
+    system, prompt, id_map = build_evidence_prompt(query, hits)
+    generation_start = time.monotonic()
+    raw_output = provider.generate(prompt, system=system)
+    generation_seconds = time.monotonic() - generation_start
+    return _finalize_answer(query, hits, provider, raw_output, prompt, id_map, generation_seconds)

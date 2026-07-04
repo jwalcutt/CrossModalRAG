@@ -119,6 +119,7 @@ export function AskView({ health }: ViewProps) {
   const [level, setLevel] = useState("evidence");
   const [useLlm, setUseLlm] = useState(true);
   const [result, setResult] = useState<AnswerPayload | null>(null);
+  const [liveText, setLiveText] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -133,11 +134,24 @@ export function AskView({ health }: ViewProps) {
     setLoading(true);
     setError(null);
     try {
-      setResult(await api.ask(q, { profile, level, use_llm: useLlm && llmReady }));
+      if (useLlm && llmReady) {
+        // Stream the synthesized answer token-by-token; the final event carries
+        // the same payload as /ask (citations validated on the full output).
+        setResult(null);
+        setLiveText(null);
+        setResult(
+          await api.askStream(q, { profile, level, use_llm: true }, (text) =>
+            setLiveText((t) => (t ?? "") + text),
+          ),
+        );
+      } else {
+        setResult(await api.ask(q, { profile, level, use_llm: false }));
+      }
     } catch (err) {
       setError(String((err as Error)?.message ?? err));
     } finally {
       setLoading(false);
+      setLiveText(null);
     }
   }
 
@@ -220,6 +234,18 @@ export function AskView({ health }: ViewProps) {
             Ask a question above. Pick a <code>profile</code> to weight semantics vs. recency, or raise the{" "}
             <code>level</code> to enter at episodes or concepts.
           </Empty>
+        )}
+        {loading && liveText !== null && !result && (
+          <div className="answer-grid">
+            <section className="answer-block" aria-label="Answer (streaming)">
+              <div className="answer-meta">
+                <span className="badge model">synthesizing…</span>
+              </div>
+              <p className="answer-prose text-pretty">
+                <Answer text={liveText} onCite={() => undefined} />
+              </p>
+            </section>
+          </div>
         )}
         {result && (
           <div className="answer-grid">

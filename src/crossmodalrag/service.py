@@ -25,7 +25,7 @@ from crossmodalrag.db import connect, init_db
 from crossmodalrag.embed.provider import get_default_provider
 from crossmodalrag.generate.answer import generated_answer_to_dict, template_answer_to_dict
 from crossmodalrag.generate.provider import LLMUnavailable, get_default_llm_provider
-from crossmodalrag.generate.synthesize import synthesize_answer
+from crossmodalrag.generate.synthesize import synthesize_answer, synthesize_answer_stream
 from crossmodalrag.memory.integrity import memory_stats
 from crossmodalrag.retrieve.hybrid import DEFAULT_PROFILE, retrieve
 from crossmodalrag.retrieve.nodes import candidate_chunk_ids, retrieve_nodes
@@ -119,6 +119,57 @@ def answer_payload(
     if matched_nodes:
         data["matched_nodes"] = matched_nodes_payload(matched_nodes)
     return data
+
+
+def answer_stream_events(
+    conn: sqlite3.Connection,
+    *,
+    query: str,
+    top_k: int = 5,
+    profile: str = DEFAULT_PROFILE,
+    level: str = "evidence",
+    modalities: list[str] | None = None,
+    use_llm: bool = True,
+):
+    """Streaming variant of :func:`answer_payload`: an event iterator for live UIs.
+
+    Yields zero or more ``{"type": "token", "text": ...}`` events as the LLM
+    generates, then exactly one ``{"type": "answer", "data": ...}`` event whose
+    ``data`` is the same payload :func:`answer_payload` returns (identical
+    contract — citations/abstention computed on the full output). Gate
+    abstentions, ``use_llm=False``, and an unreachable LLM (including
+    mid-stream failure) all still end with the final ``answer`` event, so
+    consumers can rely on it unconditionally.
+    """
+    start = time.monotonic()
+    hits, matched_nodes = retrieve_for_answer(
+        conn, query=query, top_k=top_k, profile=profile, level=level, modalities=modalities
+    )
+    provider = get_default_llm_provider() if use_llm else None
+    if provider is not None:
+        gen = None
+        try:
+            stream = synthesize_answer_stream(query, hits, provider)
+            while True:
+                try:
+                    fragment = next(stream)
+                except StopIteration as stop:
+                    gen = stop.value
+                    break
+                yield {"type": "token", "text": fragment}
+        except LLMUnavailable:
+            provider = None
+        if gen is not None:
+            data = generated_answer_to_dict(gen, total_seconds=time.monotonic() - start)
+            if matched_nodes:
+                data["matched_nodes"] = matched_nodes_payload(matched_nodes)
+            yield {"type": "answer", "data": data}
+            return
+
+    data = template_answer_to_dict(query, hits, total_seconds=time.monotonic() - start)
+    if matched_nodes:
+        data["matched_nodes"] = matched_nodes_payload(matched_nodes)
+    yield {"type": "answer", "data": data}
 
 
 def ping_ollama() -> bool:

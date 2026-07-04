@@ -640,6 +640,116 @@ def test_ask_json_stays_buffered_even_on_tty(tmp_path, monkeypatch, capsys) -> N
     assert data["answer"] == "Grounded answer [E1]."
 
 
+def test_synthesize_answer_stream_returns_answer_as_generator_value() -> None:
+    fragments = ["Claim ", "[E1]."]
+    from crossmodalrag.generate.synthesize import synthesize_answer_stream
+
+    stream = synthesize_answer_stream(
+        "q", [_hit(1, "alpha")], StreamingStubProvider(fragments), min_evidence_score=0.0
+    )
+    seen: list[str] = []
+    while True:
+        try:
+            seen.append(next(stream))
+        except StopIteration as stop:
+            gen = stop.value
+            break
+    assert seen == fragments
+    assert gen.answer_text == "Claim [E1]."
+    assert gen.cited_evidence_ids == ["E1"]
+
+
+# --- service layer: answer_stream_events (the /ask/stream backbone) -----------------------
+
+
+def _service_conn(tmp_path):
+    conn = connect(tmp_path / "memory.db")
+    init_db(conn)
+    cur = conn.execute(
+        "INSERT INTO sources (source_type, source_uri, timestamp, title) VALUES (?, ?, ?, ?)",
+        ("note", "/abs/x.md", "2026-06-01T00:00:00+00:00", "x"),
+    )
+    conn.execute(
+        "INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text) VALUES (?, ?, ?)",
+        (int(cur.lastrowid), 0, "fingerprint deterministic ingestion"),
+    )
+    conn.commit()
+    return conn
+
+
+def test_answer_stream_events_tokens_then_final_answer(tmp_path, monkeypatch) -> None:
+    import crossmodalrag.service as svc
+
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    monkeypatch.setattr(
+        svc, "get_default_llm_provider",
+        lambda: StreamingStubProvider(["Grounded ", "answer [E1]."]),
+    )
+    conn = _service_conn(tmp_path)
+    events = list(svc.answer_stream_events(conn, query="fingerprint"))
+    conn.close()
+
+    assert [e["type"] for e in events] == ["token", "token", "answer"]
+    assert "".join(e["text"] for e in events[:-1]) == "Grounded answer [E1]."
+    final = events[-1]["data"]
+    assert final["answer"] == "Grounded answer [E1]."
+    assert final["cited_evidence_ids"] == ["E1"]
+    assert final["evidence"]  # provenance present, same contract as answer_payload
+
+
+def test_answer_stream_events_final_data_matches_answer_payload(tmp_path, monkeypatch) -> None:
+    import crossmodalrag.service as svc
+
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    monkeypatch.setattr(
+        svc, "get_default_llm_provider",
+        lambda: StreamingStubProvider(["Grounded ", "answer [E1]."]),
+    )
+    conn = _service_conn(tmp_path)
+    streamed = list(svc.answer_stream_events(conn, query="fingerprint"))[-1]["data"]
+    buffered = svc.answer_payload(conn, query="fingerprint")
+    conn.close()
+
+    streamed.pop("timing"), buffered.pop("timing")  # wall-clock differs per call
+    assert streamed == buffered  # identical contract, streaming is display-only
+
+
+def test_answer_stream_events_no_llm_emits_only_final_template(tmp_path, monkeypatch) -> None:
+    import crossmodalrag.service as svc
+
+    conn = _service_conn(tmp_path)
+    events = list(svc.answer_stream_events(conn, query="fingerprint", use_llm=False))
+    conn.close()
+
+    assert [e["type"] for e in events] == ["answer"]
+    assert events[0]["data"]["model"] is None  # deterministic template path
+
+
+def test_answer_stream_events_llm_failure_falls_back_to_template(tmp_path, monkeypatch) -> None:
+    import crossmodalrag.service as svc
+
+    class _FailsMidStream:
+        name = "fail-stream"
+
+        def generate(self, prompt, system=None):
+            raise LLMUnavailable("down")
+
+        def generate_stream(self, prompt, system=None):
+            yield "partial "
+            raise LLMUnavailable("connection dropped mid-stream")
+
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    monkeypatch.setattr(svc, "get_default_llm_provider", lambda: _FailsMidStream())
+    conn = _service_conn(tmp_path)
+    events = list(svc.answer_stream_events(conn, query="fingerprint"))
+    conn.close()
+
+    # Tokens before the failure are emitted, and the stream STILL ends with a
+    # final answer event (the template fallback) so consumers never hang.
+    assert [e["type"] for e in events] == ["token", "answer"]
+    assert events[-1]["data"]["model"] is None
+
+
 def test_streamed_output_matches_buffered_output_when_answered(tmp_path, monkeypatch, capsys) -> None:
     import sys as _sys
 

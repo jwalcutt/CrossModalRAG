@@ -55,7 +55,7 @@ def create_app():
     )
     from crossmodalrag.memory.integrity import memory_stats
     from crossmodalrag.memory.recall import generate_recall_cards, recall_card_to_dict
-    from crossmodalrag.service import answer_payload, health_report
+    from crossmodalrag.service import answer_payload, answer_stream_events, health_report
     from crossmodalrag.usage.store import usage_summaries
     from crossmodalrag.usage.strength import usage_summary_to_dict
 
@@ -92,6 +92,34 @@ def create_app():
                 conn, query=q, top_k=top_k, profile=profile, level=level,
                 modalities=modality, use_llm=use_llm,
             )
+
+    @app.get("/ask/stream")
+    def ask_stream(
+        q: str = Query(..., description="The query."),
+        top_k: int = 5,
+        profile: str = "balanced",
+        level: str = "evidence",
+        modality: list[str] | None = Query(None),
+        use_llm: bool = True,
+    ):
+        """Streaming `/ask`: NDJSON events — `{"type":"token","text":…}` per LLM fragment,
+        then one final `{"type":"answer","data":…}` carrying the exact `/ask` payload.
+        The final event always arrives (gate abstentions, `use_llm=false`, and LLM
+        failures included), so clients can rely on it unconditionally.
+        """
+        import json
+
+        from fastapi.responses import StreamingResponse
+
+        def _ndjson():
+            with _conn() as conn:
+                for event in answer_stream_events(
+                    conn, query=q, top_k=top_k, profile=profile, level=level,
+                    modalities=modality, use_llm=use_llm,
+                ):
+                    yield json.dumps(event) + "\n"
+
+        return StreamingResponse(_ndjson(), media_type="application/x-ndjson")
 
     @app.get("/concepts")
     def concepts(top: int = 20) -> dict:
