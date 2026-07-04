@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from crossmodalrag.config import get_min_evidence_score
@@ -102,12 +103,20 @@ def synthesize_answer(
     hits: list[RetrievalHit],
     provider: LLMProvider,
     min_evidence_score: float | None = None,
+    on_token: Callable[[str], None] | None = None,
 ) -> GeneratedAnswer:
     """Generate an evidence-constrained answer, abstaining when evidence is weak.
 
     The weak-retrieval gate short-circuits BEFORE calling the LLM when there are
     no hits or the top hit scores below the threshold, preventing ungrounded
     speculation (provenance-first / explicit-uncertainty non-negotiables).
+
+    Pass ``on_token`` to observe text fragments as the LLM produces them
+    (via ``provider.generate_stream``); the library stays UI-agnostic, so
+    callers own any display. Citations/abstention are still computed from the
+    accumulated full output, and the returned ``GeneratedAnswer`` is identical
+    to the buffered path. The gate abstains before the LLM, so ``on_token``
+    never fires for weak-retrieval abstentions.
     """
     threshold = min_evidence_score if min_evidence_score is not None else get_min_evidence_score()
     top_score = hits[0].score if hits else 0.0
@@ -125,7 +134,14 @@ def synthesize_answer(
 
     system, prompt, id_map = build_evidence_prompt(query, hits)
     generation_start = time.monotonic()
-    raw_output = provider.generate(prompt, system=system)
+    if on_token is not None:
+        fragments: list[str] = []
+        for fragment in provider.generate_stream(prompt, system=system):
+            fragments.append(fragment)
+            on_token(fragment)
+        raw_output = "".join(fragments).strip()
+    else:
+        raw_output = provider.generate(prompt, system=system)
     generation_seconds = time.monotonic() - generation_start
 
     cited = parse_citations(raw_output)

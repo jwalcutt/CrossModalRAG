@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from typing import Protocol, runtime_checkable
 
 from crossmodalrag.config import (
@@ -29,6 +30,14 @@ class LLMProvider(Protocol):
     def generate(self, prompt: str, system: str | None = None) -> str:
         ...
 
+    def generate_stream(self, prompt: str, system: str | None = None) -> Iterator[str]:
+        """Yield the response incrementally as token/text fragments.
+
+        Joining every yielded fragment must equal (modulo the outer strip)
+        what ``generate`` returns for the same inputs.
+        """
+        ...
+
 
 class OllamaProvider:
     """Local LLM via the Ollama HTTP API (stdlib urllib, no new dependency)."""
@@ -46,10 +55,19 @@ class OllamaProvider:
         self.keep_alive = keep_alive if keep_alive is not None else get_llm_keep_alive()
 
     def generate(self, prompt: str, system: str | None = None) -> str:
+        return "".join(self.generate_stream(prompt, system=system)).strip()
+
+    def generate_stream(self, prompt: str, system: str | None = None) -> Iterator[str]:
+        """Stream the response as text fragments via Ollama's NDJSON protocol.
+
+        With ``"stream": true`` Ollama emits one JSON object per line
+        (``{"response": "...", "done": false}`` ... ``{"done": true}``), so
+        fragments can be yielded as lines arrive — still stdlib urllib only.
+        """
         payload: dict[str, object] = {
             "model": self.name,
             "prompt": prompt,
-            "stream": False,
+            "stream": True,
             # Keep the model resident between calls: cold-loading it dominated
             # tail latency (30 s vs 18 min for near-identical prompts).
             "keep_alive": self.keep_alive,
@@ -66,21 +84,28 @@ class OllamaProvider:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                body = response.read().decode("utf-8", errors="replace")
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise LLMUnavailable(
+                            f"Unexpected non-JSON response from Ollama: {exc}"
+                        ) from exc
+                    if "error" in data:
+                        raise LLMUnavailable(f"Ollama error: {data['error']}")
+                    fragment = data.get("response")
+                    if fragment:
+                        yield str(fragment)
+                    if data.get("done"):
+                        return
         except (urllib.error.URLError, OSError) as exc:
             raise LLMUnavailable(
                 f"Could not reach Ollama at {self.base_url} (model '{self.name}'): {exc}. "
                 "Is `ollama serve` running and the model pulled?"
             ) from exc
-
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError as exc:
-            raise LLMUnavailable(f"Unexpected non-JSON response from Ollama: {exc}") from exc
-
-        if "error" in data:
-            raise LLMUnavailable(f"Ollama error: {data['error']}")
-        return str(data.get("response", "")).strip()
 
 
 def get_default_llm_provider(model: str | None = None) -> LLMProvider | None:

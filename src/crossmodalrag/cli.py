@@ -32,7 +32,9 @@ from crossmodalrag.embed.store import (
 )
 from crossmodalrag.evaluation import load_eval_queries_file, run_eval, upsert_eval_queries
 from crossmodalrag.generate.answer import (
+    format_answer_stream_header,
     format_generated_answer,
+    format_generated_answer_footer,
     format_grounded_answer,
     generated_answer_to_dict,
     template_answer_to_dict,
@@ -171,6 +173,7 @@ def ask_cmd(
     modalities: list[str] | None = None,
     accept: bool = False,
     track: bool | None = None,
+    stream: bool = True,
 ) -> None:
     db_path = get_db_path()
     # Usage tracking is opt-in: off unless enabled by env / --track / --accept, and never by --no-track.
@@ -198,9 +201,30 @@ def ask_cmd(
 
     provider = get_default_llm_provider() if use_llm else None
     if provider is not None:
+        # Stream tokens live only for human-readable TTY output: --json stays a
+        # buffered contract, and piped/redirected output stays clean.
+        do_stream = stream and not as_json and sys.stdout.isatty()
+        streamed_any = False
+
+        def _print_token(fragment: str) -> None:
+            nonlocal streamed_any
+            if not streamed_any:
+                # Lazy header: the weak-retrieval gate abstains before the LLM,
+                # so nothing is printed until the first real token arrives.
+                _print_matched_nodes(matched_payload, level)
+                print(format_answer_stream_header(query, provider.name))
+                streamed_any = True
+            sys.stdout.write(fragment)
+            sys.stdout.flush()
+
         try:
-            gen = synthesize_answer(query, hits, provider)
+            gen = synthesize_answer(
+                query, hits, provider, on_token=_print_token if do_stream else None
+            )
         except LLMUnavailable as exc:
+            if streamed_any:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
             print(f"[notice] LLM unavailable, falling back to evidence template: {exc}", file=sys.stderr)
             provider = None
         else:
@@ -209,6 +233,14 @@ def ask_cmd(
                 if matched_payload:
                     data["matched_nodes"] = matched_payload
                 print(json.dumps(data, indent=2))
+            elif streamed_any:
+                # Answer text already on screen; close the line and render the
+                # trailer (status/citations/evidence/debug) from the full output.
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                footer = format_generated_answer_footer(gen, explain=explain, debug=debug)
+                if footer:
+                    print(footer)
             else:
                 _print_matched_nodes(matched_payload, level)
                 print(format_generated_answer(gen, explain=explain, debug=debug))
@@ -1232,6 +1264,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not log usage events for this query, even if tracking is enabled by env.",
     )
+    p_ask.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Print the answer only once generation finishes instead of streaming tokens "
+        "live (streaming applies to interactive terminals only; --json is always buffered).",
+    )
 
     p_eval = sub.add_parser(
         "eval",
@@ -1578,6 +1616,7 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None
             modalities=args.modality,
             accept=args.accept,
             track=track,
+            stream=not args.no_stream,
         )
         return
     if args.command == "eval":

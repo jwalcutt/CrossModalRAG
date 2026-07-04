@@ -59,20 +59,53 @@ def format_grounded_answer(query: str, hits: list[RetrievalHit], explain: bool =
     return "\n".join(lines)
 
 
+def _abstention_status_line(gen: GeneratedAnswer) -> str:
+    # Distinguish gate refusals from model refusals, and show the top retrieval
+    # score so "abstained despite strong evidence" is visible, not hidden.
+    top_score = gen.evidence[0].score if gen.evidence else 0.0
+    reason = gen.abstention_reason or "insufficient evidence"
+    return f"Status: abstained ({reason}; top retrieval score {top_score:.3f})"
+
+
+def format_answer_stream_header(query: str, model: str) -> str:
+    """Header printed before live-streamed answer tokens (mirrors the buffered layout)."""
+    return "\n".join([f'Query: "{query}"', f"Model: {model}", "", "Answer:"])
+
+
+def format_generated_answer_footer(
+    gen: GeneratedAnswer, explain: bool = False, debug: bool = False
+) -> str:
+    """Everything after the answer text, for the streaming path.
+
+    The abstention status is only known post-generation, so when tokens were
+    streamed live it renders here instead of in the header.
+    """
+    lines: list[str] = []
+    if gen.abstained:
+        lines.append("")
+        lines.append(_abstention_status_line(gen))
+    lines.extend(_answer_trailer_lines(gen, explain=explain, debug=debug))
+    return "\n".join(lines)
+
+
 def format_generated_answer(gen: GeneratedAnswer, explain: bool = False, debug: bool = False) -> str:
     lines: list[str] = []
     lines.append(f'Query: "{gen.query}"')
     lines.append(f"Model: {gen.model}")
     if gen.abstained:
-        # Distinguish gate refusals from model refusals, and show the top retrieval
-        # score so "abstained despite strong evidence" is visible, not hidden.
-        top_score = gen.evidence[0].score if gen.evidence else 0.0
-        reason = gen.abstention_reason or "insufficient evidence"
-        lines.append(f"Status: abstained ({reason}; top retrieval score {top_score:.3f})")
+        lines.append(_abstention_status_line(gen))
     lines.append("")
     lines.append("Answer:")
     lines.append(gen.answer_text)
+    lines.extend(_answer_trailer_lines(gen, explain=explain, debug=debug))
+    return "\n".join(lines)
 
+
+def _answer_trailer_lines(
+    gen: GeneratedAnswer, explain: bool = False, debug: bool = False
+) -> list[str]:
+    """Citation warnings + evidence + debug blocks shared by buffered/streamed rendering."""
+    lines: list[str] = []
     if gen.invalid_citations:
         lines.append("")
         lines.append(
@@ -106,7 +139,7 @@ def format_generated_answer(gen: GeneratedAnswer, explain: bool = False, debug: 
         lines.append("--- debug: raw model output ---")
         lines.append(gen.raw_output)
 
-    return "\n".join(lines)
+    return lines
 
 
 def generated_answer_to_dict(gen: GeneratedAnswer, *, total_seconds: float | None = None) -> dict:

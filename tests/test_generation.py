@@ -151,19 +151,60 @@ def test_plain_text_renders_page_locator_and_ocr_confidence() -> None:
     assert "ocr_conf=0.95" in text
 
 
+class _FakeNDJSONResp:
+    """Fake urlopen response emitting Ollama's streaming NDJSON protocol."""
+
+    def __init__(self, lines: list[dict]) -> None:
+        self._lines = lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def __iter__(self):
+        return iter(json.dumps(line).encode("utf-8") + b"\n" for line in self._lines)
+
+
 def test_ollama_provider_parses_response(monkeypatch) -> None:
-    class _FakeResp:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def read(self):
-            return json.dumps({"response": "hello world"}).encode("utf-8")
-
-    monkeypatch.setattr(provider_mod.urllib.request, "urlopen", lambda *a, **k: _FakeResp())
+    resp = _FakeNDJSONResp(
+        [{"response": "hello ", "done": False}, {"response": "world", "done": True}]
+    )
+    monkeypatch.setattr(provider_mod.urllib.request, "urlopen", lambda *a, **k: resp)
     assert OllamaProvider(model="x").generate("prompt") == "hello world"
+
+
+def test_ollama_provider_streams_fragments_and_stops_at_done(monkeypatch) -> None:
+    resp = _FakeNDJSONResp(
+        [
+            {"response": "a", "done": False},
+            {"response": "b", "done": False},
+            {"response": "", "done": True},
+            {"response": "IGNORED-AFTER-DONE", "done": False},
+        ]
+    )
+    monkeypatch.setattr(provider_mod.urllib.request, "urlopen", lambda *a, **k: resp)
+    assert list(OllamaProvider(model="x").generate_stream("prompt")) == ["a", "b"]
+
+
+def test_ollama_provider_stream_payload_requests_streaming(monkeypatch) -> None:
+    captured: dict = {}
+
+    def _fake_urlopen(request, timeout=None):
+        captured.update(json.loads(request.data.decode("utf-8")))
+        return _FakeNDJSONResp([{"response": "ok", "done": True}])
+
+    monkeypatch.setattr(provider_mod.urllib.request, "urlopen", _fake_urlopen)
+    OllamaProvider(model="x").generate("prompt")
+    assert captured["stream"] is True
+
+
+def test_ollama_provider_stream_raises_on_error_line(monkeypatch) -> None:
+    resp = _FakeNDJSONResp([{"error": "model not found"}])
+    monkeypatch.setattr(provider_mod.urllib.request, "urlopen", lambda *a, **k: resp)
+    with pytest.raises(LLMUnavailable, match="model not found"):
+        list(OllamaProvider(model="x").generate_stream("prompt"))
 
 
 def test_ollama_provider_raises_llm_unavailable(monkeypatch) -> None:
@@ -413,3 +454,212 @@ def test_source_coverage_counts_distinct_sources_not_citations(tmp_path, monkeyp
         conn, StubLLMProvider(output="Answer [E1][E2]."), query_prefix="[t2]"
     )
     assert summary.source_coverage == 0.5  # one distinct gold source of two, not 2/2
+
+
+# --- streaming: live token output must not change the grounded-answer contract ------------
+
+
+class StreamingStubProvider:
+    def __init__(self, fragments: list[str], name: str = "stub-stream") -> None:
+        self.name = name
+        self._fragments = fragments
+        self.generate_calls = 0
+        self.stream_calls = 0
+
+    def generate(self, prompt: str, system: str | None = None) -> str:
+        self.generate_calls += 1
+        return "".join(self._fragments).strip()
+
+    def generate_stream(self, prompt: str, system: str | None = None):
+        self.stream_calls += 1
+        yield from self._fragments
+
+
+def test_on_token_receives_fragments_and_answer_matches_joined_stream() -> None:
+    fragments = ["Claim ", "one ", "[E1].", " Claim two ", "[E5]."]
+    provider = StreamingStubProvider(fragments)
+    seen: list[str] = []
+    gen = synthesize_answer(
+        "q", [_hit(1, "alpha"), _hit(2, "beta")], provider,
+        min_evidence_score=0.0, on_token=seen.append,
+    )
+    assert seen == fragments
+    assert provider.stream_calls == 1
+    assert provider.generate_calls == 0
+    assert gen.answer_text == "".join(fragments).strip()
+
+
+def test_streamed_and_buffered_paths_produce_identical_answers() -> None:
+    fragments = ["Claim one ", "[E1].", " Claim two ", "[E5]."]
+    hits = [_hit(1, "alpha"), _hit(2, "beta")]
+    streamed = synthesize_answer(
+        "q", hits, StreamingStubProvider(fragments), min_evidence_score=0.0,
+        on_token=lambda _fragment: None,
+    )
+    buffered = synthesize_answer(
+        "q", hits, StubLLMProvider(output="".join(fragments)), min_evidence_score=0.0
+    )
+    assert streamed.answer_text == buffered.answer_text
+    assert streamed.cited_evidence_ids == buffered.cited_evidence_ids == ["E1"]
+    assert streamed.invalid_citations == buffered.invalid_citations == ["E5"]
+    assert streamed.abstained == buffered.abstained is False
+
+
+def test_streamed_llm_abstention_still_detected() -> None:
+    # The exact-sentence refusal arrives in pieces; abstention is judged on the whole.
+    midpoint = len(INSUFFICIENT_EVIDENCE_TEXT) // 2
+    fragments = [INSUFFICIENT_EVIDENCE_TEXT[:midpoint], INSUFFICIENT_EVIDENCE_TEXT[midpoint:]]
+    gen = synthesize_answer(
+        "q", [_hit(1, "alpha")], StreamingStubProvider(fragments),
+        min_evidence_score=0.0, on_token=lambda _fragment: None,
+    )
+    assert gen.abstained
+    assert gen.abstention_reason == "llm_insufficient"
+
+
+def test_on_token_not_called_when_gate_abstains() -> None:
+    provider = StreamingStubProvider(["should not stream"])
+    seen: list[str] = []
+    gen = synthesize_answer(
+        "q", [_hit(1, "alpha", score=0.05)], provider,
+        min_evidence_score=0.15, on_token=seen.append,
+    )
+    assert gen.abstained
+    assert seen == []
+    assert provider.stream_calls == 0
+
+
+def test_llm_unavailable_propagates_mid_stream() -> None:
+    class _FailsMidStream:
+        name = "fail-stream"
+
+        def generate(self, prompt: str, system: str | None = None) -> str:
+            return ""
+
+        def generate_stream(self, prompt: str, system: str | None = None):
+            yield "partial "
+            raise LLMUnavailable("connection dropped mid-stream")
+
+    seen: list[str] = []
+    with pytest.raises(LLMUnavailable, match="mid-stream"):
+        synthesize_answer(
+            "q", [_hit(1, "alpha")], _FailsMidStream(),
+            min_evidence_score=0.0, on_token=seen.append,
+        )
+    assert seen == ["partial "]  # fragments before the failure were observable
+
+
+def _seed_ask_db(tmp_path, monkeypatch) -> None:
+    db = tmp_path / "memory.db"
+    monkeypatch.setenv("CMRAG_DB_PATH", str(db))
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    conn = connect(db)
+    init_db(conn)
+    cur = conn.execute(
+        "INSERT INTO sources (source_type, source_uri, timestamp, title) VALUES (?, ?, ?, ?)",
+        ("note", "/abs/x.md", "2026-06-01T00:00:00+00:00", "x"),
+    )
+    conn.execute(
+        "INSERT INTO evidence_chunks (source_id, chunk_index, chunk_text) VALUES (?, ?, ?)",
+        (int(cur.lastrowid), 0, "fingerprint deterministic ingestion"),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_ask_streams_tokens_on_tty_with_footer(tmp_path, monkeypatch, capsys) -> None:
+    import sys as _sys
+
+    from crossmodalrag import cli
+
+    _seed_ask_db(tmp_path, monkeypatch)
+    provider = StreamingStubProvider(["Grounded ", "answer [E1]."])
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    monkeypatch.setattr(_sys.stdout, "isatty", lambda: True)
+
+    cli.ask_cmd("fingerprint", top_k=3)
+    out = capsys.readouterr().out
+
+    assert provider.stream_calls == 1  # streamed, not buffered
+    assert "Answer:\nGrounded answer [E1]." in out
+    assert out.count("Answer:") == 1  # answer text not re-printed after streaming
+    assert "Evidence:" in out  # provenance footer still rendered
+    assert "chunk_id=" in out
+
+
+def test_ask_no_stream_flag_uses_buffered_path(tmp_path, monkeypatch, capsys) -> None:
+    import sys as _sys
+
+    from crossmodalrag import cli
+
+    _seed_ask_db(tmp_path, monkeypatch)
+    provider = StreamingStubProvider(["Grounded ", "answer [E1]."])
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    monkeypatch.setattr(_sys.stdout, "isatty", lambda: True)
+
+    cli.ask_cmd("fingerprint", top_k=3, stream=False)
+    out = capsys.readouterr().out
+
+    assert provider.stream_calls == 0
+    assert provider.generate_calls == 1
+    assert "Grounded answer [E1]." in out
+    assert "Evidence:" in out
+
+
+def test_ask_does_not_stream_when_stdout_is_not_a_tty(tmp_path, monkeypatch, capsys) -> None:
+    from crossmodalrag import cli
+
+    _seed_ask_db(tmp_path, monkeypatch)
+    provider = StreamingStubProvider(["Grounded ", "answer [E1]."])
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    # capsys stdout is not a TTY -> piped/redirected output stays buffered.
+
+    cli.ask_cmd("fingerprint", top_k=3)
+    out = capsys.readouterr().out
+
+    assert provider.stream_calls == 0
+    assert provider.generate_calls == 1
+    assert "Grounded answer [E1]." in out
+
+
+def test_ask_json_stays_buffered_even_on_tty(tmp_path, monkeypatch, capsys) -> None:
+    import sys as _sys
+
+    from crossmodalrag import cli
+
+    _seed_ask_db(tmp_path, monkeypatch)
+    provider = StreamingStubProvider(["Grounded ", "answer [E1]."])
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    monkeypatch.setattr(_sys.stdout, "isatty", lambda: True)
+
+    cli.ask_cmd("fingerprint", top_k=3, as_json=True)
+    out = capsys.readouterr().out
+
+    assert provider.stream_calls == 0
+    data = json.loads(out)  # a single valid JSON document, no interleaved tokens
+    assert data["answer"] == "Grounded answer [E1]."
+
+
+def test_streamed_output_matches_buffered_output_when_answered(tmp_path, monkeypatch, capsys) -> None:
+    import sys as _sys
+
+    from crossmodalrag import cli
+
+    _seed_ask_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(_sys.stdout, "isatty", lambda: True)
+
+    monkeypatch.setattr(
+        cli, "get_default_llm_provider",
+        lambda: StreamingStubProvider(["Grounded ", "answer [E1]."]),
+    )
+    cli.ask_cmd("fingerprint", top_k=3)
+    streamed = capsys.readouterr().out
+
+    monkeypatch.setattr(
+        cli, "get_default_llm_provider",
+        lambda: StreamingStubProvider(["Grounded ", "answer [E1]."]),
+    )
+    cli.ask_cmd("fingerprint", top_k=3, stream=False)
+    buffered = capsys.readouterr().out
+
+    assert streamed == buffered  # rendering parity: streaming is display-only

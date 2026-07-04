@@ -176,6 +176,12 @@ short-circuited before the LLM) or `llm_insufficient` (the model judged the evid
 shown in the status line alongside the top retrieval score, and as `abstention_reason` in `--json`.
 If Ollama is unreachable it automatically falls back to the deterministic evidence template.
 
+In an interactive terminal the answer streams token-by-token as it is generated, with the
+citations/evidence footer rendered once generation completes (citation validation and abstention
+detection still run on the full output). Pass `--no-stream` to print the answer only when
+finished. Piped/redirected output and `--json` are always buffered, so scripting contracts are
+unchanged.
+
 Requires [Ollama](https://ollama.com) running locally with a model pulled
 (`ollama pull gemma4`). Swap models anytime via `CMRAG_LLM_MODEL`.
 
@@ -248,6 +254,8 @@ Retrieval also applies a **source-diversity cap** (`CMRAG_MAX_CHUNKS_PER_SOURCE`
 matching note cannot fill the whole evidence list and crowd out every other source. Drill-down
 retrieval from memory nodes is never capped (it deliberately ranks within one node's evidence).
 - `--no-llm` skips synthesis and returns the deterministic evidence template.
+- `--no-stream` disables live token streaming and prints the finished answer in one block
+(streaming only applies to interactive terminals; piped output and `--json` are always buffered).
 - `--json` emits a structured answer (stable contract for UIs; includes `matched_nodes` at memory
 levels, plus a `timing` block — `total_seconds` for the whole ask and `generation_seconds` for the
 LLM call alone — so latency is measurable per answer).
@@ -308,7 +316,7 @@ checks for measuring no regression.
 - `mem ingest-git [<repo_path> ...] [--max-commits N]` (falls back to `.env` `REPO_PATH_*`)
 - `mem ingest-pdf [<path> ...]` (file or directory; falls back to `.env` `PDF_PATH_*`; requires the `[pdf]` extra)
 - `mem ingest-images [<path> ...]` (file or directory; falls back to `.env` `IMAGE_PATH_*`; requires the `[ocr]` extra + a tesseract binary)
-- `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent|usage] [--modality text|code|pdf|image ...] [--explain] [--no-llm] [--json] [--debug] [--track|--no-track] [--accept]`
+- `mem ask "<query>" [--top-k N] [--level evidence|event|episode|concept] [--profile balanced|relevant|recent|usage] [--modality text|code|pdf|image ...] [--explain] [--no-llm] [--no-stream] [--json] [--debug] [--track|--no-track] [--accept]`
 - `mem usage [--clear] [--top N] [--json]` (local usage-tracking stats; `--clear` wipes the history)
 - `mem forgetting [--level concept|episode|event|all] [--top N] [--min-support N] [--json]` ("what am I likely forgetting?" — important-but-stale memories, grounded to evidence)
 - `mem recall [--level concept|episode|event|all] [--top N] [--min-support N] [--regenerate] [--json]` (grounded active-recall study cards for the highest forgetting-risk memories)
