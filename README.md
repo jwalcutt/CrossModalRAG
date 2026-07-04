@@ -423,6 +423,9 @@ events whose evidence links point at chunk ids re-issued by a re-chunk (`mem syn
 upgrade): text-identical sources are skipped by extraction, so their events are re-linked to the
 source's current chunks instead — no LLM involved, and `mem memory-stats` integrity comes back
 clean. Events whose source no longer exists are reported, never silently deleted.
+Model replies that are *almost* JSON (unquoted values/keys, LaTeX escapes, truncated arrays)
+are repaired syntactically rather than discarded; sources whose output still can't be parsed
+are listed by id + path in the command output and retried on the next run.
 - **L2 episodes** (no LLM): events are grouped into "sessions of related work" by project (git repo
 / containing folder for notes, PDFs, and images) and time gap — a new episode starts when
 consecutive events in a project are more than `CMRAG_EPISODE_GAP_HOURS` apart (default 24). A folder

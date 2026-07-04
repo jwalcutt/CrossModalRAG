@@ -176,3 +176,126 @@ def test_limit_bounds_sources_processed(tmp_path) -> None:
     # Remaining two are picked up on subsequent runs.
     result2 = extract_pending_sources(conn, provider, limit=5)
     assert result2.sources_processed == 2
+
+
+def test_parse_repairs_unquoted_string_values(tmp_path) -> None:
+    # Regression: llama3.2 (temp 0) emits well-shaped objects whose string
+    # values are missing quotes ('"summary": Cache exists to reduce latency').
+    conn = _new_db(tmp_path)
+    _add_source(conn, "note-a", ["alpha"])
+    raw = (
+        '[\n  {\n    "title": "High-level purpose of cache",\n'
+        '    "summary": Cache exists to reduce latency/bandwidth\n  },\n'
+        '  {\n    "title": "Core problem",\n'
+        '    "summary": Modern systems have a memory hierarchy\n  }\n]'
+    )
+
+    result = extract_pending_sources(conn, StubLLMProvider(output=raw))
+
+    assert result.parse_failures == 0
+    assert result.events_created == 2
+    titles = {n.title for n in list_nodes(conn, level=1, node_type="event")}
+    assert titles == {"High-level purpose of cache", "Core problem"}
+
+
+def test_parse_repairs_braceless_bracket_blocks(tmp_path) -> None:
+    # Regression: llama3.2 sometimes writes each event as its own bracket block
+    # without braces ('[ "title": ..., "summary": ... ], [ ... ]').
+    conn = _new_db(tmp_path)
+    _add_source(conn, "note-a", ["alpha"])
+    raw = (
+        '[\n  "title": "Added journal entry",\n'
+        '  "summary": "A new journal entry was added"\n],\n \n'
+        '[\n  "title": "Updated spring-journal.pdf",\n'
+        '  "summary": "The size was updated"\n],'
+    )
+
+    result = extract_pending_sources(conn, StubLLMProvider(output=raw))
+
+    assert result.parse_failures == 0
+    assert result.events_created == 2
+    titles = {n.title for n in list_nodes(conn, level=1, node_type="event")}
+    assert titles == {"Added journal entry", "Updated spring-journal.pdf"}
+
+
+def test_parse_repair_does_not_requote_quoted_values(tmp_path) -> None:
+    conn = _new_db(tmp_path)
+    _add_source(conn, "note-a", ["alpha"])
+    raw = '[\n  {\n    "title": "Quoted title",\n    "summary": bare value here\n  }\n]'
+
+    extract_pending_sources(conn, StubLLMProvider(output=raw))
+
+    node = list_nodes(conn, level=1, node_type="event")[0]
+    assert node.title == "Quoted title"  # not '"Quoted title"'
+    assert node.content == "bare value here"
+
+
+def test_unparseable_sources_are_identified(tmp_path) -> None:
+    conn = _new_db(tmp_path)
+    sid = _add_source(conn, "note-a", ["alpha"])
+    provider = StubLLMProvider(output="I could not produce JSON, sorry.")
+
+    result = extract_pending_sources(conn, provider)
+
+    assert result.parse_failures == 1
+    assert result.unparseable_sources == [(sid, "note-a")]
+
+
+def test_parse_recovers_truncated_array(tmp_path) -> None:
+    # Regression: the model runs out of tokens and never closes the array —
+    # every fully-emitted object is recovered, the trailing partial one dropped.
+    conn = _new_db(tmp_path)
+    _add_source(conn, "note-a", ["alpha"])
+    raw = (
+        '[\n  {"title": "DHCP client checks database", "summary": "Checks static db"},\n'
+        '  {"title": "Pool exhausted", "summary": "Available IPs depleted"},\n'
+        '  {"title": "Partial object", "summary": "cut off mid-'
+    )
+
+    result = extract_pending_sources(conn, StubLLMProvider(output=raw))
+
+    assert result.parse_failures == 0
+    titles = {n.title for n in list_nodes(conn, level=1, node_type="event")}
+    assert titles == {"DHCP client checks database", "Pool exhausted"}
+
+
+def test_parse_repairs_latex_escapes(tmp_path) -> None:
+    # Regression: LaTeX in summaries ('\\implies', '\\land') is not a legal JSON
+    # escape sequence; it must survive as literal text, not fail the whole array.
+    conn = _new_db(tmp_path)
+    _add_source(conn, "note-a", ["alpha"])
+    raw = '[{"title": "Eliminate biconditional", "summary": "(A $\\implies$ B) $\\land$ (B $\\implies$ A)"}]'
+
+    result = extract_pending_sources(conn, StubLLMProvider(output=raw))
+
+    assert result.parse_failures == 0
+    node = list_nodes(conn, level=1, node_type="event")[0]
+    assert "$\\implies$" in node.content
+
+
+def test_parse_accepts_capitalized_keys(tmp_path) -> None:
+    conn = _new_db(tmp_path)
+    _add_source(conn, "note-a", ["alpha"])
+    raw = '[\n  "Title": "Twos complement",\n  "Summary": "Definition"\n],\n[\n  "Title": "Derivation",\n  "Summary": "From minterms"\n]'
+
+    result = extract_pending_sources(conn, StubLLMProvider(output=raw))
+
+    assert result.parse_failures == 0
+    titles = {n.title for n in list_nodes(conn, level=1, node_type="event")}
+    assert titles == {"Twos complement", "Derivation"}
+
+
+def test_parse_repairs_unquoted_keys(tmp_path) -> None:
+    # Regression: keys emitted without quotes ('{"title": "x", summary: "y"}').
+    conn = _new_db(tmp_path)
+    _add_source(conn, "note-a", ["alpha"])
+    raw = (
+        '[\n  {"title": "Hot Air Gun turned OFF", summary: "Mode changed from ON to OFF"},\n'
+        '  {"title": "Fan turned ON", summary: "Mode changed from OFF to ON"}\n]'
+    )
+
+    result = extract_pending_sources(conn, StubLLMProvider(output=raw))
+
+    assert result.parse_failures == 0
+    titles = {n.title for n in list_nodes(conn, level=1, node_type="event")}
+    assert titles == {"Hot Air Gun turned OFF", "Fan turned ON"}

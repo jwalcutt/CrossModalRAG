@@ -465,6 +465,10 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
             print(f"  Events created: {result.events_created}")
             if result.parse_failures:
                 print(f"  Unparseable sources (will retry next run): {result.parse_failures}")
+                for source_id, source_uri in result.unparseable_sources[:10]:
+                    print(f"    #{source_id} {source_uri}")
+                if len(result.unparseable_sources) > 10:
+                    print(f"    … (+{len(result.unparseable_sources) - 10} more)")
 
         if build_eps:
             episodes = build_episodes(conn)

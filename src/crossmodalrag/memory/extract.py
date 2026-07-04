@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from crossmodalrag.generate.provider import LLMProvider
 from crossmodalrag.memory.store import (
@@ -37,6 +38,9 @@ class ExtractionResult:
     sources_skipped: int
     events_created: int
     parse_failures: int
+    # (source_id, source_uri) of sources whose LLM output stayed unparseable —
+    # surfaced so operators can see *which* sources keep failing, not just a count.
+    unparseable_sources: list[tuple[int, str]] = field(default_factory=list)
 
 
 def extract_pending_sources(
@@ -59,8 +63,9 @@ def extract_pending_sources(
     skipped = 0
     events_created = 0
     parse_failures = 0
+    unparseable: list[tuple[int, str]] = []
 
-    rows = conn.execute("SELECT id FROM sources ORDER BY id ASC").fetchall()
+    rows = conn.execute("SELECT id, source_uri FROM sources ORDER BY id ASC").fetchall()
     total = len(rows)
     for scanned, row in enumerate(rows, start=1):
         if limit is not None and processed >= limit:
@@ -84,6 +89,8 @@ def extract_pending_sources(
         )
         events_created += created
         parse_failures += failed
+        if failed:
+            unparseable.append((source_id, str(row["source_uri"])))
         processed += 1
         conn.commit()
         if progress is not None:
@@ -94,6 +101,7 @@ def extract_pending_sources(
         sources_skipped=skipped,
         events_created=events_created,
         parse_failures=parse_failures,
+        unparseable_sources=unparseable,
     )
 
 
@@ -250,14 +258,33 @@ def _record_derivation(
 
 
 def _parse_events(raw: str) -> list[dict] | None:
-    """Tolerantly parse a JSON array of events. Returns None on unparseable output."""
+    """Tolerantly parse a JSON array of events. Returns None on unparseable output.
+
+    Beyond fenced/prose-wrapped arrays, this repairs the malformations small
+    local models actually produce at temp 0 (observed with llama3.2): unquoted
+    string values (``"summary": Cache exists to …``), JSON-invalid backslash
+    escapes (LaTeX like ``\\implies`` inside summaries), capitalized keys
+    (``"Title"``), objects written as brace-less bracket blocks
+    (``[ "title": …, "summary": … ], [ … ]``), and arrays truncated before the
+    closing ``]`` (token limit) — recovering the complete objects that did
+    arrive. Repairs are purely syntactic — no content is invented.
+    """
+    parsed = None
     start = raw.find("[")
     end = raw.rfind("]")
-    if start == -1 or end == -1 or end < start:
-        return None
-    try:
-        parsed = json.loads(raw[start : end + 1])
-    except json.JSONDecodeError:
+    if start != -1 and end > start:
+        segment = raw[start : end + 1]
+        for candidate in (segment, _repair(segment)):
+            try:
+                parsed = json.loads(candidate)
+                break
+            except json.JSONDecodeError:
+                parsed = None
+    if parsed is None:
+        parsed = _objects_from_bracket_blocks(raw)
+    if parsed is None:
+        parsed = _objects_from_flat_blocks(raw)
+    if parsed is None:
         return None
     if not isinstance(parsed, list):
         return None
@@ -266,6 +293,7 @@ def _parse_events(raw: str) -> list[dict] | None:
     for item in parsed:
         if not isinstance(item, dict):
             continue
+        item = {str(k).lower(): v for k, v in item.items()}
         title = str(item.get("title", "")).strip()
         if not title:
             continue
@@ -274,6 +302,97 @@ def _parse_events(raw: str) -> list[dict] | None:
         if len(events) >= MAX_EVENTS_PER_SOURCE:
             break
     return events
+
+
+# A "title"/"summary" line whose value is not quoted (nor an object/array):
+# quote the remainder of the line. Only these two keys exist in the contract and
+# both are strings, so quoting is always safe.
+# The lookahead includes \s* so regex backtracking over the separator can never
+# land in front of an already-quoted value and re-quote it. Case-insensitive:
+# the model sometimes capitalizes the keys ("Title"/"Summary").
+_BARE_VALUE_RE = re.compile(
+    r'^(\s*"(?:title|summary)"\s*:\s*)(?!\s*["\[{])(.+?)(,?)\s*$', re.IGNORECASE
+)
+
+
+def _quote_bare_values(segment: str) -> str:
+    lines = []
+    for line in segment.splitlines():
+        match = _BARE_VALUE_RE.match(line)
+        if match:
+            prefix, value, comma = match.groups()
+            line = f"{prefix}{json.dumps(value.strip())}{comma}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+# A backslash not starting a legal JSON escape (LaTeX in summaries: \implies,
+# \alpha, \land) becomes a literal backslash. Applied *after* _quote_bare_values,
+# whose json.dumps output is already correctly escaped.
+_INVALID_ESCAPE_RE = re.compile(r'\\(?![\\/"bfnrtu])')
+
+
+def _escape_invalid_backslashes(segment: str) -> str:
+    return _INVALID_ESCAPE_RE.sub(r"\\\\", segment)
+
+
+# An unquoted key after an object/array opener or a comma ('{"title": "x", summary: "y"}').
+_BARE_KEY_RE = re.compile(r"([{,\[]\s*)(title|summary)(\s*:)", re.IGNORECASE)
+
+
+def _quote_bare_keys(segment: str) -> str:
+    return _BARE_KEY_RE.sub(r'\1"\2"\3', segment)
+
+
+def _repair(segment: str) -> str:
+    return _escape_invalid_backslashes(_quote_bare_values(_quote_bare_keys(segment)))
+
+
+_BRACKET_BLOCK_RE = re.compile(r"\[([^\[\]]+)\]")
+
+
+def _objects_from_bracket_blocks(raw: str) -> list[dict] | None:
+    """Recover events written as brace-less bracket blocks.
+
+    Parses each flat ``[ … ]`` block that starts with a "title" key as if it
+    were a JSON object; blocks that still fail to parse are skipped.
+    """
+    objects: list[dict] = []
+    for match in _BRACKET_BLOCK_RE.finditer(raw):
+        body = match.group(1).strip()
+        if not body.lower().startswith('"title"'):
+            continue
+        try:
+            item = json.loads("{" + _repair(body) + "}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            objects.append(item)
+    return objects or None
+
+
+_FLAT_OBJECT_RE = re.compile(r"\{[^{}]*\}")
+
+
+def _objects_from_flat_blocks(raw: str) -> list[dict] | None:
+    """Recover the complete ``{…}`` objects from an otherwise unparseable reply.
+
+    Covers arrays truncated before the closing ``]`` (the model ran out of
+    tokens): every fully-emitted flat object is kept, the trailing partial one
+    never matches. Only reached after whole-array parsing has failed.
+    """
+    objects: list[dict] = []
+    for match in _FLAT_OBJECT_RE.finditer(raw):
+        body = match.group(0)
+        for candidate in (body, _repair(body)):
+            try:
+                item = json.loads(candidate)
+                break
+            except json.JSONDecodeError:
+                item = None
+        if isinstance(item, dict):
+            objects.append(item)
+    return objects or None
 
 
 def _fingerprint(model: str, prompt_version: str, source_text: str) -> str:
