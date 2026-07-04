@@ -195,7 +195,23 @@ def resolve_to_evidence(
         for child_level, child_id in _downward_children(conn, cur_level, cur_id):
             stack.append((child_level, child_id, depth + 1))
 
-    return sorted(evidence)
+    # An edge may reference a chunk id re-issued by a re-chunk; a dead id is not
+    # evidence. Filtering here keeps every caller honest — integrity checks,
+    # drill-down retrieval, and distilled core-evidence subsets alike.
+    return sorted(_existing_chunk_ids(conn, evidence))
+
+
+def _existing_chunk_ids(conn: sqlite3.Connection, chunk_ids: list[int]) -> list[int]:
+    existing: list[int] = []
+    batch_size = 500  # stay under SQLite's bound-parameter limit
+    for start in range(0, len(chunk_ids), batch_size):
+        batch = chunk_ids[start : start + batch_size]
+        placeholders = ",".join("?" for _ in batch)
+        rows = conn.execute(
+            f"SELECT id FROM evidence_chunks WHERE id IN ({placeholders})", batch
+        ).fetchall()
+        existing.extend(int(r["id"]) for r in rows)
+    return existing
 
 
 def _downward_children(conn: sqlite3.Connection, parent_level: int, parent_id: int) -> list[tuple[int, int]]:

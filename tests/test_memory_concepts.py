@@ -158,3 +158,78 @@ def test_embed_pending_nodes_idempotent_and_model_aware(conn) -> None:
 
     other = StubEmbedProvider(name="stub-embed-v2")
     assert embed_pending_nodes(conn, other, level=1, node_type="event") == 2
+
+
+class RecordingLLMProvider(StubLLMProvider):
+    def __init__(self, label: str) -> None:
+        super().__init__(label=label)
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str, system: str | None = None) -> str:
+        self.prompts.append(prompt)
+        return super().generate(prompt, system=system)
+
+
+def test_prose_label_falls_back_to_deterministic_name(conn) -> None:
+    # Regression: a rambling model response used to be stored verbatim as the
+    # concept title ("It appears that the text is a collection of notes ...").
+    _add_event(conn, "parser bounds fix")
+    _add_event(conn, "parser bounds check bug")
+    embed = StubEmbedProvider()
+    embed_pending_nodes(conn, embed, level=1, node_type="event")
+    prose = "It appears that the text is a collection of notes and explanations on various topics, including:"
+
+    result = build_concepts(conn, embed, StubLLMProvider(label=prose), threshold=THRESHOLD)
+
+    assert result.named_by_llm == 0
+    assert result.named_by_fallback == 1
+    concept = list_nodes(conn, level=3, node_type="concept")[0]
+    assert concept.title != prose
+    assert "(+1 related)" in concept.title
+
+
+@pytest.mark.parametrize(
+    "label,valid",
+    [
+        ("Parser bounds work", True),
+        ("Fourier transform theory", True),
+        ("It appears that the text is a collection of notes", False),
+        ("This is a list of changes made to the project:", False),
+        ("A very long label that keeps going and going beyond any reasonable topic name", False),
+        ("Trailing colon:", False),
+        ("", False),
+    ],
+)
+def test_valid_label_rules(label: str, valid: bool) -> None:
+    from crossmodalrag.memory.concepts import _valid_label
+
+    assert _valid_label(label) is valid
+
+
+def test_naming_prompt_uses_representative_sample(conn) -> None:
+    # A big cluster must not dump every member title into the naming prompt —
+    # oversized listings are what pushed the model into prose answers.
+    from crossmodalrag.memory.concepts import MAX_TITLE_EVENTS
+
+    for i in range(MAX_TITLE_EVENTS * 3):
+        _add_event(conn, f"parser bounds fix variant {i}")
+    embed = StubEmbedProvider()
+    embed_pending_nodes(conn, embed, level=1, node_type="event")
+    llm = RecordingLLMProvider(label="Parser bounds work")
+
+    result = build_concepts(conn, embed, llm, threshold=THRESHOLD)
+
+    assert result.concepts_created >= 1
+    assert llm.prompts
+    for prompt in llm.prompts:
+        listed = [line for line in prompt.splitlines() if line.startswith("- ")]
+        assert 0 < len(listed) <= MAX_TITLE_EVENTS
+
+
+def test_default_concept_threshold_is_anisotropy_aware(monkeypatch) -> None:
+    from crossmodalrag.config import get_concept_sim_threshold
+
+    monkeypatch.delenv("CMRAG_CONCEPT_SIM_THRESHOLD", raising=False)
+    assert get_concept_sim_threshold() == 0.80
+    monkeypatch.setenv("CMRAG_CONCEPT_SIM_THRESHOLD", "0.65")
+    assert get_concept_sim_threshold() == 0.65

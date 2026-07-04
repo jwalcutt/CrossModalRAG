@@ -432,6 +432,24 @@ def build_memory_cmd(level: str = "all", limit: int | None = None, model: str | 
         print(f"Memory DB: {db_path}")
 
         if build_events:
+            # Deterministic self-heal before extraction: a re-chunk re-issues chunk ids,
+            # and text-identical sources are fingerprint-skipped by extraction, which
+            # would leave their events anchored to dead ids.
+            from crossmodalrag.memory.integrity import repair_evidence_edges
+
+            repair = repair_evidence_edges(conn)
+            if repair.events_repaired or repair.orphaned_event_ids:
+                print("L1 evidence re-anchor")
+                print(
+                    f"  Events re-anchored: {repair.events_repaired} "
+                    f"(dead edges removed: {repair.edges_removed}, edges added: {repair.edges_added})"
+                )
+                if repair.orphaned_event_ids:
+                    shown = ", ".join(str(i) for i in repair.orphaned_event_ids[:10])
+                    more = len(repair.orphaned_event_ids) - 10
+                    suffix = f" (+{more} more)" if more > 0 else ""
+                    print(f"  Events with no recoverable source (left in place): {shown}{suffix}")
+
             provider = get_default_llm_provider(model or get_extract_model())
             if provider is None:
                 raise SystemExit("No LLM provider configured (set CMRAG_LLM_PROVIDER).")

@@ -83,7 +83,7 @@ def build_concepts(
         label = None
         if llm_enabled:
             try:
-                label = _llm_name(llm_provider, member_ids, titles)
+                label = _llm_name(llm_provider, member_ids, vec_by_id, titles)
             except LLMUnavailable:
                 llm_enabled = False  # stop retrying for the rest of this run
                 label = None
@@ -188,12 +188,84 @@ def _cluster(node_vectors: list[tuple[int, list[float]]], threshold: float) -> l
     return [[ids[k] for k in group] for group in members if len(group) >= MIN_CONCEPT_SIZE]
 
 
-def _llm_name(provider: LLMProvider, member_ids: list[int], titles: dict[int, str]) -> str | None:
-    listing = "\n".join(f"- {titles.get(mid, '')}" for mid in member_ids if titles.get(mid))
-    prompt = f"Events:\n{listing}\n\nTopic label:"
+def _llm_name(
+    provider: LLMProvider,
+    member_ids: list[int],
+    vec_by_id: dict[int, list[float]],
+    titles: dict[int, str],
+) -> str | None:
+    # A representative sample, not the full member list: a large cluster's full
+    # listing overflows the model's attention and yields prose instead of a label.
+    listing = "\n".join(
+        f"- {title}" for title in _representative_titles(member_ids, vec_by_id, titles)
+    )
+    if not listing:
+        return None
+    prompt = f"Events (representative sample):\n{listing}\n\nTopic label:"
     raw = provider.generate(prompt, system=CONCEPT_NAME_SYSTEM_PROMPT)
     label = raw.strip().strip('"').strip("'").splitlines()[0].strip() if raw.strip() else ""
-    return label or None
+    return label if _valid_label(label) else None
+
+
+def _representative_titles(
+    member_ids: list[int],
+    vec_by_id: dict[int, list[float]],
+    titles: dict[int, str],
+    limit: int = MAX_TITLE_EVENTS,
+) -> list[str]:
+    """Up to ``limit`` distinct member titles, most-central first (deterministic)."""
+    ranked = _rank_by_centroid(member_ids, vec_by_id)
+    out: list[str] = []
+    seen: set[str] = set()
+    for mid in ranked:
+        title = (titles.get(mid) or "").strip()
+        if not title or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+        out.append(title)
+        if len(out) >= limit:
+            break
+    return out
+
+
+# The model is asked for a <=6-word noun phrase; anything sentence-shaped
+# (prose about the input) falls back to the deterministic name instead of
+# being stored verbatim.
+MAX_LABEL_WORDS = 8
+MAX_LABEL_CHARS = 80
+
+
+def _valid_label(label: str) -> bool:
+    if not label or len(label) > MAX_LABEL_CHARS:
+        return False
+    if label.endswith((":", ".", ",")):
+        return False
+    if len(label.split()) > MAX_LABEL_WORDS:
+        return False
+    first = label.split()[0].lower()
+    if first in {"it", "this", "that", "these", "those", "there", "here"}:
+        return False
+    return True
+
+
+def _rank_by_centroid(member_ids: list[int], vec_by_id: dict[int, list[float]]) -> list[int]:
+    """Member ids ordered by similarity to the cluster centroid (ties by id)."""
+    vectors = [(mid, vec_by_id[mid]) for mid in member_ids if mid in vec_by_id]
+    if not vectors:
+        return list(member_ids)
+    import numpy as np
+
+    mat = np.array([v for _, v in vectors], dtype=np.float32)
+    norms = np.linalg.norm(mat, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    unit = mat / norms
+    centroid = unit.mean(axis=0)
+    cnorm = float(np.linalg.norm(centroid)) or 1.0
+    sims = unit @ (centroid / cnorm)
+    order = sorted(range(len(vectors)), key=lambda k: (-float(sims[k]), vectors[k][0]))
+    ranked = [vectors[k][0] for k in order]
+    ranked.extend(mid for mid in member_ids if mid not in vec_by_id)
+    return ranked
 
 
 def _fallback_name(
@@ -208,19 +280,8 @@ def _fallback_name(
 
 
 def _central_member(member_ids: list[int], vec_by_id: dict[int, list[float]]) -> int:
-    vectors = [(mid, vec_by_id[mid]) for mid in member_ids if mid in vec_by_id]
-    if not vectors:
-        return member_ids[0]
-    import numpy as np
-
-    mat = np.array([v for _, v in vectors], dtype=np.float32)
-    norms = np.linalg.norm(mat, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    unit = mat / norms
-    centroid = unit.mean(axis=0)
-    cnorm = float(np.linalg.norm(centroid)) or 1.0
-    sims = unit @ (centroid / cnorm)
-    return vectors[int(sims.argmax())][0]
+    ranked = _rank_by_centroid(member_ids, vec_by_id)
+    return ranked[0] if ranked else member_ids[0]
 
 
 def _concept_content(member_ids: list[int], titles: dict[int, str]) -> str:

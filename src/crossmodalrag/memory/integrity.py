@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from dataclasses import dataclass
 
 from crossmodalrag.memory.store import EVIDENCE_LEVEL, resolve_to_evidence
 
@@ -85,6 +87,107 @@ def find_dangling_edges(conn: sqlite3.Connection) -> list[int]:
                 dangling.append(int(row["id"]))
                 break
     return dangling
+
+
+@dataclass(frozen=True)
+class EvidenceRepairResult:
+    events_checked: int
+    events_repaired: int
+    edges_removed: int
+    edges_added: int
+    orphaned_event_ids: list[int]
+
+
+def repair_evidence_edges(conn: sqlite3.Connection) -> EvidenceRepairResult:
+    """Re-anchor L1 events whose ``derived_from`` edges point at dead chunk ids.
+
+    Re-chunking a source (content change, or a chunker-version bump picked up by
+    ``mem sync``) deletes and re-inserts its evidence_chunks rows with new ids.
+    Event extraction re-derives only when the source *text* changed, so a
+    text-identical re-chunk leaves that source's events pointing at chunk ids
+    that no longer exist. The extraction grain is source-level — an event links
+    to every chunk of its source — so the repair is deterministic and needs no
+    LLM: drop the dead edges and link the event to the source's current chunks.
+
+    Events whose source (or its chunks) no longer exists cannot be re-anchored;
+    they are reported in ``orphaned_event_ids`` and left untouched — nothing is
+    deleted by this function.
+    """
+    chunk_ids = {int(r["id"]) for r in conn.execute("SELECT id FROM evidence_chunks").fetchall()}
+    source_ids = {int(r["id"]) for r in conn.execute("SELECT id FROM sources").fetchall()}
+
+    events_checked = events_repaired = edges_removed = edges_added = 0
+    orphaned: list[int] = []
+
+    events = conn.execute(
+        "SELECT id, metadata_json FROM memory_nodes WHERE level = 1 ORDER BY id ASC"
+    ).fetchall()
+    for event in events:
+        event_id = int(event["id"])
+        events_checked += 1
+        edges = conn.execute(
+            """
+            SELECT id, child_id FROM memory_edges
+            WHERE parent_level = 1 AND parent_id = ? AND child_level = ?
+              AND relation = 'derived_from'
+            """,
+            (event_id, EVIDENCE_LEVEL),
+        ).fetchall()
+        dead = [(int(e["id"]), int(e["child_id"])) for e in edges if int(e["child_id"]) not in chunk_ids]
+        if not dead:
+            continue
+
+        source_id = _event_source_id(event["metadata_json"])
+        current_chunks: list[int] = []
+        if source_id is not None and source_id in source_ids:
+            current_chunks = [
+                int(r["id"])
+                for r in conn.execute(
+                    "SELECT id FROM evidence_chunks WHERE source_id = ? ORDER BY chunk_index ASC",
+                    (source_id,),
+                ).fetchall()
+            ]
+        if not current_chunks:
+            orphaned.append(event_id)
+            continue
+
+        for edge_id, _ in dead:
+            conn.execute("DELETE FROM memory_edges WHERE id = ?", (edge_id,))
+        edges_removed += len(dead)
+        live = {int(e["child_id"]) for e in edges} - {cid for _, cid in dead}
+        for chunk_id in current_chunks:
+            if chunk_id in live:
+                continue
+            conn.execute(
+                """
+                INSERT INTO memory_edges (parent_level, parent_id, child_level, child_id, relation, weight)
+                VALUES (1, ?, ?, ?, 'derived_from', 1.0)
+                ON CONFLICT(parent_level, parent_id, child_level, child_id, relation) DO NOTHING
+                """,
+                (event_id, EVIDENCE_LEVEL, chunk_id),
+            )
+            edges_added += 1
+        events_repaired += 1
+
+    conn.commit()
+    return EvidenceRepairResult(
+        events_checked=events_checked,
+        events_repaired=events_repaired,
+        edges_removed=edges_removed,
+        edges_added=edges_added,
+        orphaned_event_ids=orphaned,
+    )
+
+
+def _event_source_id(metadata_json: object) -> int | None:
+    if not metadata_json:
+        return None
+    try:
+        meta = json.loads(str(metadata_json))
+    except json.JSONDecodeError:
+        return None
+    source_id = meta.get("source_id") if isinstance(meta, dict) else None
+    return int(source_id) if isinstance(source_id, int) else None
 
 
 def count_nodes_by_level(conn: sqlite3.Connection) -> dict[int, int]:

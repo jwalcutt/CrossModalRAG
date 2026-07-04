@@ -78,11 +78,19 @@ def get_episode_gap_seconds() -> int:
 
 
 def get_concept_sim_threshold() -> float:
-    raw = os.getenv("CMRAG_CONCEPT_SIM_THRESHOLD", "0.60").strip()
+    """Cosine threshold for L3 concept clustering. Default 0.80.
+
+    bge-class embeddings are anisotropic: cosines between *unrelated* short texts
+    commonly sit near 0.6, so a 0.60 threshold chains the whole event set into a
+    couple of mega-clusters. Measured on a 2.5k-event corpus, 0.80 yields coherent
+    single-topic concepts (max cluster ~2% of events) while covering ~70% of
+    events; unclustered events remain retrievable at L1/L0.
+    """
+    raw = os.getenv("CMRAG_CONCEPT_SIM_THRESHOLD", "0.80").strip()
     try:
         return float(raw)
     except ValueError:
-        return 0.60
+        return 0.80
 
 
 def get_usage_halflife_days() -> float:

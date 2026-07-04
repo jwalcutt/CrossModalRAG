@@ -418,15 +418,20 @@ grouping**, and **L3 concept clustering**. `mem build-memory` derives all three:
 - **L1 events** (requires Ollama): a local LLM extracts atomic events ("what happened": a decision,
 learning, fix, task, or change) from each source — including PDF pages and OCR'd images — linking
 each event to its L0 evidence (so the hierarchy spans modalities and drills back to a cited
-page/region locator).
+page/region locator). Before extracting, `build-memory` deterministically **re-anchors** existing
+events whose evidence links point at chunk ids re-issued by a re-chunk (`mem sync` after a chunker
+upgrade): text-identical sources are skipped by extraction, so their events are re-linked to the
+source's current chunks instead — no LLM involved, and `mem memory-stats` integrity comes back
+clean. Events whose source no longer exists are reported, never silently deleted.
 - **L2 episodes** (no LLM): events are grouped into "sessions of related work" by project (git repo
 / containing folder for notes, PDFs, and images) and time gap — a new episode starts when
 consecutive events in a project are more than `CMRAG_EPISODE_GAP_HOURS` apart (default 24). A folder
 mixing notes, PDFs, and screenshots forms one cross-modal episode. Each episode links to its members.
 - **L3 concepts** (requires the `[embeddings]` extra; LLM naming optional): events are clustered by
-semantic similarity (cosine ≥ `CMRAG_CONCEPT_SIM_THRESHOLD`, default 0.60) into recurring topics
+semantic similarity (cosine ≥ `CMRAG_CONCEPT_SIM_THRESHOLD`, default 0.80) into recurring topics
 that span episodes. Each new concept is named by the local LLM (`CMRAG_EXTRACT_MODEL`, temp 0)
-with a deterministic fallback when Ollama is unavailable.
+from a representative sample of member events; a response that isn't a short topic label (or an
+unavailable Ollama) falls back to a deterministic name.
 - **Graph** (no LLM/embeddings): computes PageRank **centrality** per node (an importance signal
 stored on each node) and **concept co-occurrence** links — two concepts get a `relates_to` edge
 (weighted by shared-episode count) when they have events in the same episode.
@@ -545,7 +550,7 @@ export CMRAG_LLM_KEEP_ALIVE=30m            # keep the model loaded between calls
 export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval score
 export CMRAG_EXTRACT_MODEL=llama3.2        # model for `mem build-memory` event extraction
 export CMRAG_EPISODE_GAP_HOURS=24          # L2 episode session gap (deterministic, no LLM)
-export CMRAG_CONCEPT_SIM_THRESHOLD=0.60    # L3 concept clustering cosine threshold (embeddings extra)
+export CMRAG_CONCEPT_SIM_THRESHOLD=0.80    # L3 concept clustering cosine threshold (embeddings extra)
 ```
 
 Distillation/drift scaffolding (additive, opt-in; defaults shown):
