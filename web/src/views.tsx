@@ -133,12 +133,13 @@ export function AskView({ health }: ViewProps) {
     if (!q || loading) return;
     setLoading(true);
     setError(null);
+    setResult(null);
+    setLiveText(null);
     try {
       if (useLlm && llmReady) {
         // Stream the synthesized answer token-by-token; the final event carries
         // the same payload as /ask (citations validated on the full output).
-        setResult(null);
-        setLiveText(null);
+        setLiveText(""); // show the streaming panel immediately (before the first token)
         setResult(
           await api.askStream(q, { profile, level, use_llm: true }, (text) =>
             setLiveText((t) => (t ?? "") + text),
@@ -229,21 +230,28 @@ export function AskView({ health }: ViewProps) {
 
       <div aria-live="polite">
         {error && <ErrorMsg error={error} />}
-        {!result && !error && !loading && (
+        {!result && !error && !loading && liveText === null && (
           <Empty title="No query yet">
             Ask a question above. Pick a <code>profile</code> to weight semantics vs. recency, or raise the{" "}
             <code>level</code> to enter at episodes or concepts.
           </Empty>
         )}
-        {loading && liveText !== null && !result && (
+        {liveText !== null && !result && (
           <div className="answer-grid">
             <section className="answer-block" aria-label="Answer (streaming)">
               <div className="answer-meta">
                 <span className="badge model">synthesizing…</span>
               </div>
-              <p className="answer-prose text-pretty">
-                <Answer text={liveText} onCite={() => undefined} />
-              </p>
+              {liveText ? (
+                <p className="answer-prose text-pretty">
+                  <Answer text={liveText} onCite={() => undefined} />
+                  <span className="stream-cursor" aria-hidden="true" />
+                </p>
+              ) : (
+                <p className="muted">
+                  Retrieving evidence… <span className="stream-cursor" aria-hidden="true" />
+                </p>
+              )}
             </section>
           </div>
         )}

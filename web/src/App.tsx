@@ -28,6 +28,13 @@ export function App() {
   const [view, setView] = useState<string>(currentHash);
   const [health, setHealth] = useState<Health | null>(null);
   const [healthErr, setHealthErr] = useState(false);
+  const [collapsed, setCollapsed] = useState<boolean>(
+    () => localStorage.getItem("rail-collapsed") === "1",
+  );
+
+  useEffect(() => {
+    localStorage.setItem("rail-collapsed", collapsed ? "1" : "0");
+  }, [collapsed]);
 
   useEffect(() => {
     let alive = true;
@@ -65,8 +72,19 @@ export function App() {
       <a className="skip-link" href="#main">
         Skip to content
       </a>
-      <div className="app">
+      <div className={`app${collapsed ? " collapsed" : ""}`}>
         <aside className="rail">
+          <button
+            type="button"
+            className="rail-toggle"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            onClick={() => setCollapsed((c) => !c)}
+          >
+            <span aria-hidden="true">{collapsed ? "»" : "«"}</span>
+          </button>
+
           <div className="brand">
             <div className="brand-mark" translate="no">
               CMRAG
@@ -84,6 +102,7 @@ export function App() {
                 type="button"
                 className="nav-item"
                 aria-current={view === n.key ? "page" : undefined}
+                title={collapsed ? n.label : undefined}
                 onClick={() => setView(n.key)}
               >
                 <span className="nav-index num" aria-hidden="true">

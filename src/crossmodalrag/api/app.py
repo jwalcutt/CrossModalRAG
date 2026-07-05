@@ -55,7 +55,12 @@ def create_app():
     )
     from crossmodalrag.memory.integrity import memory_stats
     from crossmodalrag.memory.recall import generate_recall_cards, recall_card_to_dict
-    from crossmodalrag.service import answer_payload, answer_stream_events, health_report
+    from crossmodalrag.service import (
+        answer_payload,
+        health_report,
+        retrieve_for_answer,
+        stream_answer_events,
+    )
     from crossmodalrag.usage.store import usage_summaries
     from crossmodalrag.usage.strength import usage_summary_to_dict
 
@@ -108,16 +113,25 @@ def create_app():
         failures included), so clients can rely on it unconditionally.
         """
         import json
+        import time
 
         from fastapi.responses import StreamingResponse
 
+        # Retrieve inside this handler so the sqlite connection opens and closes on
+        # one thread. The response generator below holds NO sqlite objects: the ASGI
+        # server may iterate/close it on a different worker thread (e.g. on client
+        # disconnect), where a thread-bound connection dies with ProgrammingError.
+        start = time.monotonic()
+        with _conn() as conn:
+            hits, matched_nodes = retrieve_for_answer(
+                conn, query=q, top_k=top_k, profile=profile, level=level, modalities=modality
+            )
+
         def _ndjson():
-            with _conn() as conn:
-                for event in answer_stream_events(
-                    conn, query=q, top_k=top_k, profile=profile, level=level,
-                    modalities=modality, use_llm=use_llm,
-                ):
-                    yield json.dumps(event) + "\n"
+            for event in stream_answer_events(
+                query=q, hits=hits, matched_nodes=matched_nodes, use_llm=use_llm, start=start
+            ):
+                yield json.dumps(event) + "\n"
 
         return StreamingResponse(_ndjson(), media_type="application/x-ndjson")
 

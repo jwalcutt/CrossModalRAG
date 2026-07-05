@@ -140,11 +140,37 @@ def answer_stream_events(
     abstentions, ``use_llm=False``, and an unreachable LLM (including
     mid-stream failure) all still end with the final ``answer`` event, so
     consumers can rely on it unconditionally.
+
+    Retrieval happens on the first ``next()``; the DB is not touched after
+    that. Callers that consume the stream outside the connection's scope (or
+    thread) should retrieve first and use :func:`stream_answer_events`.
     """
     start = time.monotonic()
     hits, matched_nodes = retrieve_for_answer(
         conn, query=query, top_k=top_k, profile=profile, level=level, modalities=modalities
     )
+    yield from stream_answer_events(
+        query=query, hits=hits, matched_nodes=matched_nodes, use_llm=use_llm, start=start
+    )
+
+
+def stream_answer_events(
+    *,
+    query: str,
+    hits,
+    matched_nodes,
+    use_llm: bool = True,
+    start: float | None = None,
+):
+    """DB-free core of :func:`answer_stream_events`, fed with already-retrieved evidence.
+
+    Holding no sqlite objects, this generator may be consumed — and closed —
+    from any thread and long after the retrieval connection is gone. That is
+    exactly the API streaming-response situation: the ASGI server iterates
+    (and, on client disconnect, closes) the generator on arbitrary worker
+    threads, while sqlite connections are bound to their creating thread.
+    """
+    start = time.monotonic() if start is None else start
     provider = get_default_llm_provider() if use_llm else None
     if provider is not None:
         gen = None

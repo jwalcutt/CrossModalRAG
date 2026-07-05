@@ -94,7 +94,8 @@ type AskOpts = { profile?: string; level?: string; top_k?: number; use_llm?: boo
 type StreamEvent = { type: "token"; text: string } | { type: "answer"; data: AnswerPayload };
 
 // NDJSON stream from `/ask/stream`: token events fire `onToken` as the LLM generates;
-// the final `answer` event carries the exact `/ask` payload and always arrives.
+// the final `answer` event carries the exact `/ask` payload and always arrives. Blank
+// keep-alive lines (emitted while the LLM is silent) are skipped.
 async function askStream(q: string, opts: AskOpts, onToken: (text: string) => void): Promise<AnswerPayload> {
   const res = await fetch(buildUrl("/ask/stream", { q, ...opts }));
   if (!res.ok) await throwHttpError(res);

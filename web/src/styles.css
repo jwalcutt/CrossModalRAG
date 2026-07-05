@@ -128,6 +128,26 @@ a { color: var(--amber); text-underline-offset: 3px; }
   background: linear-gradient(180deg, var(--bg-2), var(--bg));
 }
 
+.rail-toggle {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 6px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+.rail-toggle:hover { color: var(--ink); background: rgba(236, 230, 214, 0.04); border-color: rgba(227, 168, 60, 0.28); }
+
 .brand { padding: 0 8px 22px; }
 .brand-mark {
   font-family: var(--font-mono);
@@ -323,6 +343,22 @@ a { color: var(--amber); text-underline-offset: 3px; }
 }
 .answer-prose .cite:hover, .answer-prose .cite.active { background: var(--amber); color: #1a1407; }
 
+/* Live-generation cursor: its steady blink says "still streaming"; it vanishes the
+   instant generation stops (Stop button or completion), so state is never ambiguous. */
+.stream-cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--sage);
+  animation: cursor-blink 1s steps(2, jump-none) infinite;
+}
+@keyframes cursor-blink {
+  from { opacity: 1; }
+  to { opacity: 0.15; }
+}
+
 .abstain {
   border: 1px dashed var(--rule-strong);
   border-radius: var(--radius);
@@ -502,6 +538,22 @@ a { color: var(--amber); text-underline-offset: 3px; }
   font-size: 13px;
   background: rgba(207, 111, 77, 0.07);
 }
+
+/* ---------- collapsed rail ---------- */
+
+.app.collapsed { grid-template-columns: 64px 1fr; }
+.app.collapsed .rail { padding: 26px 10px 18px; align-items: center; }
+.app.collapsed .rail-toggle { align-self: center; }
+.app.collapsed .brand { padding: 0 0 22px; text-align: center; }
+.app.collapsed .brand-name,
+.app.collapsed .brand-sub,
+.app.collapsed .nav-label,
+.app.collapsed .status-text,
+.app.collapsed .status-meta { display: none; }
+.app.collapsed .brand-mark { letter-spacing: 0.06em; font-size: 10px; }
+.app.collapsed .nav-item { justify-content: center; gap: 0; padding: 9px 0; }
+.app.collapsed .nav-index { width: auto; text-align: center; }
+.app.collapsed .status-line { justify-content: center; padding: 4px 0; }
 
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; }

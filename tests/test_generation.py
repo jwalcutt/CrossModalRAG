@@ -750,6 +750,60 @@ def test_answer_stream_events_llm_failure_falls_back_to_template(tmp_path, monke
     assert events[-1]["data"]["model"] is None
 
 
+def test_stream_answer_events_works_after_retrieval_conn_closed(tmp_path, monkeypatch) -> None:
+    """The API consumes the stream long after the request-scoped conn is gone."""
+    import crossmodalrag.service as svc
+
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    monkeypatch.setattr(
+        svc, "get_default_llm_provider",
+        lambda: StreamingStubProvider(["Grounded ", "answer [E1]."]),
+    )
+    conn = _service_conn(tmp_path)
+    hits, matched_nodes = svc.retrieve_for_answer(conn, query="fingerprint")
+    conn.close()  # DB gone before a single event is consumed
+
+    events = list(
+        svc.stream_answer_events(query="fingerprint", hits=hits, matched_nodes=matched_nodes)
+    )
+    assert [e["type"] for e in events] == ["token", "token", "answer"]
+    assert events[-1]["data"]["answer"] == "Grounded answer [E1]."
+
+
+def test_stream_answer_events_close_from_another_thread_is_clean(tmp_path, monkeypatch) -> None:
+    """Client-disconnect regression: ASGI servers close abandoned response generators
+    from arbitrary worker threads. Holding a thread-bound sqlite connection inside the
+    generator died there with sqlite3.ProgrammingError ('Exception ignored in ...')."""
+    import threading
+
+    import crossmodalrag.service as svc
+
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    monkeypatch.setattr(
+        svc, "get_default_llm_provider",
+        lambda: StreamingStubProvider(["a", "b", "c", "d [E1]."]),
+    )
+    conn = _service_conn(tmp_path)
+    hits, matched_nodes = svc.retrieve_for_answer(conn, query="fingerprint")
+    conn.close()
+
+    events = svc.stream_answer_events(query="fingerprint", hits=hits, matched_nodes=matched_nodes)
+    assert next(events)["type"] == "token"  # mid-stream, like a user hitting Stop
+
+    errors: list[BaseException] = []
+
+    def _close() -> None:
+        try:
+            events.close()
+        except BaseException as exc:  # noqa: BLE001 - the regression IS "close raised"
+            errors.append(exc)
+
+    t = threading.Thread(target=_close)
+    t.start()
+    t.join()
+    assert errors == []
+
+
 def test_streamed_output_matches_buffered_output_when_answered(tmp_path, monkeypatch, capsys) -> None:
     import sys as _sys
 

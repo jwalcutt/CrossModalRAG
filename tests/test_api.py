@@ -155,6 +155,32 @@ def test_ask_stream_tokens_then_final_answer_matches_ask(client, monkeypatch):
     assert final == buffered
 
 
+def test_ask_stream_early_disconnect_leaves_server_healthy(client, monkeypatch):
+    """Abandoning the NDJSON stream mid-flight (the console's Stop button) must not
+    corrupt server state — follow-up requests keep working."""
+    import crossmodalrag.service as svc
+
+    class _ManyTokens:
+        name = "stub-stream"
+
+        def generate(self, prompt, system=None):
+            return "x [E1]."
+
+        def generate_stream(self, prompt, system=None):
+            for i in range(50):
+                yield f"tok{i} "
+
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    monkeypatch.setattr(svc, "get_default_llm_provider", lambda: _ManyTokens())
+
+    with client.stream("GET", "/ask/stream", params={"q": "parser"}) as r:
+        assert r.status_code == 200
+        next(r.iter_lines())  # read one event, then drop the connection
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/ask", params={"q": "parser", "use_llm": "false"}).status_code == 200
+
+
 def test_bad_level_is_400(client):
     assert client.get("/forgetting", params={"level": "nonsense"}).status_code == 400
 
