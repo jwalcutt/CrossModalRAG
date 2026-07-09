@@ -41,6 +41,19 @@ SYSTEM_PROMPT = (
     f"sentence and nothing else:\n{INSUFFICIENT_EVIDENCE_TEXT}"
 )
 
+# Appended to SYSTEM_PROMPT only on multi-turn chat turns (history present).
+# The exact-refusal rule reads as absolute to small local models, which makes
+# them refuse conversation-meta requests ("rephrase that") whose retrieval is
+# incidentally irrelevant; this addendum scopes the rule without touching the
+# one-shot prompt (one-shot stays byte-identical).
+CHAT_SYSTEM_ADDENDUM = (
+    "This is one turn of an ongoing conversation with the user. Requests about "
+    "the conversation itself — rephrase, summarize, or continue an earlier "
+    "answer — are answered from the conversation history, need no citations, "
+    "and are never refused for lack of evidence. The refusal rule above applies "
+    "to questions about the user's records, not to these conversation requests."
+)
+
 # Why an answer abstained: the retrieval gate short-circuited before the LLM
 # ("weak_retrieval") vs the model itself judged the evidence insufficient
 # ("llm_insufficient"). The two used to render identically, which hid
@@ -70,15 +83,27 @@ class GeneratedAnswer:
 
 
 def build_evidence_prompt(
-    query: str, hits: list[RetrievalHit]
+    query: str, hits: list[RetrievalHit], history: str | None = None
 ) -> tuple[str, str, dict[str, RetrievalHit]]:
     """Build the (system, prompt, id_map) for grounded synthesis.
 
     Each hit gets a stable ``[E#]`` id mapping back to its RetrievalHit so
     citations can be validated and rendered with full provenance.
+
+    ``history`` is an optional pre-rendered conversation block (see
+    ``chat.render_history``) placed BEFORE the evidence so the evidence and
+    question stay adjacent at the prompt tail; it also appends
+    ``CHAT_SYSTEM_ADDENDUM`` to the system prompt (conversation-meta requests
+    answerable from history). ``None``/empty yields system+prompt byte-identical
+    to the single-turn form.
     """
+    system = SYSTEM_PROMPT + ("\n" + CHAT_SYSTEM_ADDENDUM if history else "")
     id_map: dict[str, RetrievalHit] = {}
-    lines: list[str] = ["Evidence:"]
+    lines: list[str] = []
+    if history:
+        lines.append(history)
+        lines.append("")
+    lines.append("Evidence:")
     for idx, hit in enumerate(hits, start=1):
         eid = f"E{idx}"
         id_map[eid] = hit
@@ -92,7 +117,7 @@ def build_evidence_prompt(
     lines.append("")
     lines.append(f"Question: {query}")
     lines.append("Answer (cite evidence ids inline):")
-    return SYSTEM_PROMPT, "\n".join(lines), id_map
+    return system, "\n".join(lines), id_map
 
 
 def parse_citations(text: str) -> list[str]:
@@ -167,6 +192,7 @@ def synthesize_answer_stream(
     hits: list[RetrievalHit],
     provider: LLMProvider,
     min_evidence_score: float | None = None,
+    history: str | None = None,
 ) -> Generator[str, None, GeneratedAnswer]:
     """Streaming variant of :func:`synthesize_answer`: yields text fragments as the
     LLM produces them, then returns the finished ``GeneratedAnswer`` as the
@@ -181,7 +207,7 @@ def synthesize_answer_stream(
     if gated is not None:
         return gated
 
-    system, prompt, id_map = build_evidence_prompt(query, hits)
+    system, prompt, id_map = build_evidence_prompt(query, hits, history=history)
     generation_start = time.monotonic()
     fragments: list[str] = []
     for fragment in provider.generate_stream(prompt, system=system):
@@ -198,6 +224,7 @@ def synthesize_answer(
     provider: LLMProvider,
     min_evidence_score: float | None = None,
     on_token: Callable[[str], None] | None = None,
+    history: str | None = None,
 ) -> GeneratedAnswer:
     """Generate an evidence-constrained answer, abstaining when evidence is weak.
 
@@ -207,7 +234,7 @@ def synthesize_answer(
     complete output, and ``on_token`` never fires for gate abstentions.
     """
     if on_token is not None:
-        stream = synthesize_answer_stream(query, hits, provider, min_evidence_score)
+        stream = synthesize_answer_stream(query, hits, provider, min_evidence_score, history=history)
         while True:
             try:
                 fragment = next(stream)
@@ -219,7 +246,7 @@ def synthesize_answer(
     if gated is not None:
         return gated
 
-    system, prompt, id_map = build_evidence_prompt(query, hits)
+    system, prompt, id_map = build_evidence_prompt(query, hits, history=history)
     generation_start = time.monotonic()
     raw_output = provider.generate(prompt, system=system)
     generation_seconds = time.monotonic() - generation_start

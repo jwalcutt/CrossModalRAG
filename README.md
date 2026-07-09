@@ -186,6 +186,27 @@ detection still run on the full output). Pass `--no-stream` to print the answer 
 finished. Piped/redirected output and `--json` are always buffered, so scripting contracts are
 unchanged.
 
+### Interactive multi-turn sessions (`mem chat`)
+
+Run `mem chat` (or `mem ask` with no query) to start an interactive chat session: enter successive questions until you quit, and ask follow-ups
+("expand on that", "how does that relate to…") that resolve against the conversation so far.
+
+- **In-session commands:** `/exit` or `/quit` (or Ctrl-D / Ctrl-C) ends the session; `/clear` (or
+  `/new`) resets the carried context without leaving; blank lines are ignored.
+- **Provenance is per-turn:** every turn runs retrieval independently against your memory store,
+  the weak-evidence gate and abstention apply per turn, and `[E#]` citations always refer to the
+  *current* turn's evidence — prior turns inform phrasing and reference resolution only (their old
+  citation markers are stripped from the carried context). Requests about the conversation itself
+  ("rephrase that last answer") are answered from the conversation and carry no citations.
+- **Context window:** the last `CMRAG_CHAT_CONTEXT_TURNS` (default 8) answered turns are carried;
+  older turns are dropped deterministically, and abstained or template (`--no-llm` / LLM-offline)
+  turns are never carried. Set it to 0 to disable carried context.
+- Ask options (`--profile`, `--level`, `--modality`, `--track`/`--no-track`, `--no-stream`,
+  `--explain`, `--debug`) apply to every turn; `--json` and `--accept` are one-shot-only.
+- Piped stdin works as a batch mode (one query per line, no prompt/banner). Note that with
+  lexical-only retrieval (no embeddings extra) a purely referential follow-up ("expand on that")
+  may retrieve nothing and abstain — semantic retrieval resolves this in practice.
+
 Requires [Ollama](https://ollama.com) running locally with a model pulled
 (`ollama pull gemma4`). Swap models anytime via `CMRAG_LLM_MODEL`.
 
@@ -569,6 +590,7 @@ export CMRAG_LLM_KEEP_ALIVE=30m            # keep the model loaded between calls
                                            # seconds, or -1 = until Ollama exits); cold-loads
                                            # dominate tail latency
 export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval score
+export CMRAG_CHAT_CONTEXT_TURNS=8          # prior turns carried in `mem chat` (0 disables)
 export CMRAG_EXTRACT_MODEL=llama3.2        # model for `mem build-memory` event extraction
 export CMRAG_EPISODE_GAP_HOURS=24          # L2 episode session gap (deterministic, no LLM)
 export CMRAG_CONCEPT_SIM_THRESHOLD=0.80    # L3 concept clustering cosine threshold (embeddings extra)

@@ -168,3 +168,34 @@ def test_restore_force_guard_via_cli_exit_1(monkeypatch, tmp_path, capsys):
         cli.main()
     assert exc.value.code == 1
     assert capsys.readouterr().err.startswith("error: ")
+
+
+# --- chat context turns getter -------------------------------------------------------
+
+
+def test_chat_context_turns_default(monkeypatch):
+    from crossmodalrag.config import get_chat_context_turns
+
+    monkeypatch.delenv("CMRAG_CHAT_CONTEXT_TURNS", raising=False)
+    assert get_chat_context_turns() == 8
+
+
+def test_chat_context_turns_env_override(monkeypatch):
+    from crossmodalrag.config import get_chat_context_turns
+
+    monkeypatch.setenv("CMRAG_CHAT_CONTEXT_TURNS", "3")
+    assert get_chat_context_turns() == 3
+
+
+def test_chat_context_turns_garbage_falls_back(monkeypatch):
+    from crossmodalrag.config import get_chat_context_turns
+
+    monkeypatch.setenv("CMRAG_CHAT_CONTEXT_TURNS", "many")
+    assert get_chat_context_turns() == 8
+
+
+def test_chat_context_turns_negative_clamps_to_zero(monkeypatch):
+    from crossmodalrag.config import get_chat_context_turns
+
+    monkeypatch.setenv("CMRAG_CHAT_CONTEXT_TURNS", "-2")
+    assert get_chat_context_turns() == 0

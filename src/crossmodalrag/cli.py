@@ -40,7 +40,7 @@ from crossmodalrag.generate.answer import (
     template_answer_to_dict,
 )
 from crossmodalrag.generate.provider import LLMUnavailable, get_default_llm_provider
-from crossmodalrag.generate.synthesize import synthesize_answer
+from crossmodalrag.generate.synthesize import GeneratedAnswer, synthesize_answer
 from crossmodalrag.generation_eval import run_generation_eval
 from crossmodalrag.capabilities import MissingModalityBackend
 from crossmodalrag.ingest.git import ingest_git
@@ -175,9 +175,49 @@ def ask_cmd(
     track: bool | None = None,
     stream: bool = True,
 ) -> None:
-    db_path = get_db_path()
     # Usage tracking is opt-in: off unless enabled by env / --track / --accept, and never by --no-track.
     track_enabled = False if track is False else (bool(track) or accept or usage_tracking_enabled())
+    _run_ask_turn(
+        query,
+        top_k=top_k,
+        profile=profile,
+        explain=explain,
+        use_llm=use_llm,
+        as_json=as_json,
+        debug=debug,
+        level=level,
+        modalities=modalities,
+        accept=accept,
+        track_enabled=track_enabled,
+        stream=stream,
+    )
+
+
+def _run_ask_turn(
+    query: str,
+    *,
+    top_k: int = 5,
+    profile: str = DEFAULT_PROFILE,
+    explain: bool = False,
+    use_llm: bool = True,
+    as_json: bool = False,
+    debug: bool = False,
+    level: str = "evidence",
+    modalities: list[str] | None = None,
+    accept: bool = False,
+    track_enabled: bool = False,
+    stream: bool = True,
+    history: str | None = None,
+) -> "GeneratedAnswer | None":
+    """One complete ask turn: retrieve → synthesize → render → track.
+
+    Shared by one-shot `mem ask` (history=None, byte-identical behavior) and
+    the interactive chat loop (history = the session's rendered prior turns).
+    Returns the ``GeneratedAnswer`` on the LLM path so a chat session can carry
+    the turn as context; ``None`` on the template/no-LLM paths (a template
+    render is not a synthesized answer and is never carried).
+    """
+    db_path = get_db_path()
     ask_start = time.monotonic()
     conn = connect(db_path)
     try:
@@ -219,7 +259,7 @@ def ask_cmd(
 
         try:
             gen = synthesize_answer(
-                query, hits, provider, on_token=_print_token if do_stream else None
+                query, hits, provider, on_token=_print_token if do_stream else None, history=history
             )
         except LLMUnavailable as exc:
             if streamed_any:
@@ -252,7 +292,7 @@ def ask_cmd(
                     matched_nodes=matched_nodes,
                     accepted_chunk_ids=(cited or [h.chunk_id for h in hits]) if accept else [],
                 )
-            return
+            return gen
 
     # No LLM (disabled or unavailable): deterministic evidence template.
     if as_json:
@@ -272,6 +312,7 @@ def ask_cmd(
             matched_nodes=matched_nodes,
             accepted_chunk_ids=[h.chunk_id for h in hits] if accept else [],
         )
+    return None
 
 
 def _track_ask(db_path, *, hits, matched_nodes, accepted_chunk_ids) -> None:
@@ -305,6 +346,81 @@ def _print_matched_nodes(matched_payload: list[dict], level: str) -> None:
         title = node["title"] or "untitled"
         print(f"  #{node['node_id']} (score={node['score']:.3f}, centrality={node['centrality']:.3f}): {title}")
     print()
+
+
+def chat_cmd(
+    *,
+    top_k: int = 5,
+    profile: str = DEFAULT_PROFILE,
+    explain: bool = False,
+    use_llm: bool = True,
+    debug: bool = False,
+    level: str = "evidence",
+    modalities: list[str] | None = None,
+    track: bool | None = None,
+    stream: bool = True,
+) -> None:
+    """Interactive multi-turn ask session (`mem chat`, or `mem ask` with no query).
+
+    A thin REPL over :func:`_run_ask_turn`: every turn runs retrieval
+    independently and cites the CURRENT turn's evidence; prior answered turns
+    are carried only as conversation context (`chat.render_history`, citations
+    stripped). Abstained and template (`--no-llm` / LLM-unavailable) turns are
+    never carried. Exit with /exit, /quit, or Ctrl-D; /clear or /new resets the
+    context without leaving. Piped stdin works as a batch mode (one query per
+    line, no prompt/banner).
+    """
+    from crossmodalrag.chat import ChatSession, render_history
+
+    try:  # line editing/arrow keys when available; purely optional
+        import readline  # noqa: F401
+    except ImportError:  # pragma: no cover - platform-dependent
+        pass
+
+    # Usage tracking mirrors ask_cmd (no --accept in a session).
+    track_enabled = False if track is False else (bool(track) or usage_tracking_enabled())
+    session = ChatSession()
+    interactive = sys.stdin.isatty()
+    if interactive:
+        print("Interactive session — /exit (or Ctrl-D) to quit, /clear to reset context.")
+    try:
+        while True:
+            try:
+                line = input("ask> " if interactive else "")
+            except EOFError:
+                break
+            text = line.strip()
+            if not text:
+                continue
+            if text in {"/exit", "/quit"}:
+                break
+            if text in {"/clear", "/new"}:
+                session.clear()
+                print("[context cleared]")
+                continue
+            gen = _run_ask_turn(
+                text,
+                top_k=top_k,
+                profile=profile,
+                explain=explain,
+                use_llm=use_llm,
+                level=level,
+                modalities=modalities,
+                debug=debug,
+                track_enabled=track_enabled,
+                stream=stream,
+                history=render_history(session.turns) or None,
+            )
+            if gen is not None:
+                session.add_turn(text, gen.answer_text, abstained=gen.abstained)
+            print()
+    except KeyboardInterrupt:
+        # Clean session exit whether at the prompt or mid-stream; close any
+        # partially streamed line first.
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    if interactive:
+        print("bye")
 
 
 def eval_cmd(
@@ -1204,72 +1320,93 @@ def build_parser() -> argparse.ArgumentParser:
     level_choices = ["evidence", "event", "episode", "concept"]
     modality_choices = sorted(MODALITY_SOURCE_TYPES)
 
+    def _add_ask_options(p, *, oneshot_only: bool) -> None:
+        """Shared `ask`/`chat` options; oneshot_only adds the flags that only
+        make sense for a single buffered query (--json contract, --accept)."""
+        p.add_argument("--top-k", type=int, default=get_default_top_k())
+        p.add_argument(
+            "--level",
+            choices=level_choices,
+            default="evidence",
+            help="Retrieval level: 'evidence' (L0 chunks, default) or a memory level "
+            "(event/episode/concept), which drills matched nodes down to L0 for grounding.",
+        )
+        p.add_argument(
+            "--profile",
+            choices=profile_choices,
+            default=get_default_profile(DEFAULT_PROFILE),
+            help="Hybrid retrieval profile (vector/lexical/recency blend).",
+        )
+        p.add_argument(
+            "--explain",
+            action="store_true",
+            help="Show per-hit score components (vector/lexical/recency/combined).",
+        )
+        p.add_argument(
+            "--no-llm",
+            action="store_true",
+            help="Skip LLM synthesis; return the deterministic evidence template.",
+        )
+        if oneshot_only:
+            p.add_argument(
+                "--json",
+                action="store_true",
+                dest="as_json",
+                help="Emit a structured JSON answer (stable contract for UIs); one-shot only.",
+            )
+        p.add_argument(
+            "--debug",
+            action="store_true",
+            help="Include retrieval diagnostics, the raw prompt, and raw model output.",
+        )
+        p.add_argument(
+            "--modality",
+            choices=modality_choices,
+            action="append",
+            default=None,
+            help="Restrict evidence to one or more modalities (repeatable). "
+            "Maps to source types: text=notes, code=git, pdf=PDFs, image=OCR'd images.",
+        )
+        if oneshot_only:
+            p.add_argument(
+                "--accept",
+                action="store_true",
+                help="Record this answer as accepted (usage feedback on the cited evidence); "
+                "enables tracking. One-shot only.",
+            )
+        p.add_argument(
+            "--track",
+            action="store_true",
+            help="Log usage events for this query (overrides CMRAG_USAGE_TRACKING for the call).",
+        )
+        p.add_argument(
+            "--no-track",
+            action="store_true",
+            help="Do not log usage events for this query, even if tracking is enabled by env.",
+        )
+        p.add_argument(
+            "--no-stream",
+            action="store_true",
+            help="Print the answer only once generation finishes instead of streaming tokens "
+            "live (streaming applies to interactive terminals only; --json is always buffered).",
+        )
+
     p_ask = sub.add_parser("ask", help="Query indexed evidence.")
-    p_ask.add_argument("query", type=str)
-    p_ask.add_argument("--top-k", type=int, default=get_default_top_k())
     p_ask.add_argument(
-        "--level",
-        choices=level_choices,
-        default="evidence",
-        help="Retrieval level: 'evidence' (L0 chunks, default) or a memory level "
-        "(event/episode/concept), which drills matched nodes down to L0 for grounding.",
-    )
-    p_ask.add_argument(
-        "--profile",
-        choices=profile_choices,
-        default=get_default_profile(DEFAULT_PROFILE),
-        help="Hybrid retrieval profile (vector/lexical/recency blend).",
-    )
-    p_ask.add_argument(
-        "--explain",
-        action="store_true",
-        help="Show per-hit score components (vector/lexical/recency/combined).",
-    )
-    p_ask.add_argument(
-        "--no-llm",
-        action="store_true",
-        help="Skip LLM synthesis; return the deterministic evidence template.",
-    )
-    p_ask.add_argument(
-        "--json",
-        action="store_true",
-        dest="as_json",
-        help="Emit a structured JSON answer (stable contract for UIs).",
-    )
-    p_ask.add_argument(
-        "--debug",
-        action="store_true",
-        help="Include retrieval diagnostics, the raw prompt, and raw model output.",
-    )
-    p_ask.add_argument(
-        "--modality",
-        choices=modality_choices,
-        action="append",
+        "query",
+        type=str,
+        nargs="?",
         default=None,
-        help="Restrict evidence to one or more modalities (repeatable). "
-        "Maps to source types: text=notes, code=git, pdf=PDFs, image=OCR'd images.",
+        help="Question to ask. Omit to start an interactive multi-turn session "
+        "(/exit or Ctrl-D to quit, /clear to reset context).",
     )
-    p_ask.add_argument(
-        "--accept",
-        action="store_true",
-        help="Record this answer as accepted (usage feedback on the cited evidence); enables tracking.",
+    _add_ask_options(p_ask, oneshot_only=True)
+
+    p_chat = sub.add_parser(
+        "chat",
+        help="Interactive multi-turn ask session (same as `mem ask` with no query).",
     )
-    p_ask.add_argument(
-        "--track",
-        action="store_true",
-        help="Log usage events for this query (overrides CMRAG_USAGE_TRACKING for the call).",
-    )
-    p_ask.add_argument(
-        "--no-track",
-        action="store_true",
-        help="Do not log usage events for this query, even if tracking is enabled by env.",
-    )
-    p_ask.add_argument(
-        "--no-stream",
-        action="store_true",
-        help="Print the answer only once generation finishes instead of streaming tokens "
-        "live (streaming applies to interactive terminals only; --json is always buffered).",
-    )
+    _add_ask_options(p_chat, oneshot_only=False)
 
     p_eval = sub.add_parser(
         "eval",
@@ -1602,10 +1739,29 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None
             )
         ingest_images_cmd(image_paths)
         return
-    if args.command == "ask":
+    if args.command in {"ask", "chat"}:
         track = True if args.track else (False if args.no_track else None)
+        query = getattr(args, "query", None)
+        if query is None:
+            # Interactive multi-turn session (`mem chat`, or `mem ask` with no query).
+            if getattr(args, "as_json", False):
+                raise CLIError('--json requires a one-shot query: mem ask --json "<question>"')
+            if getattr(args, "accept", False):
+                raise CLIError('--accept requires a one-shot query: mem ask --accept "<question>"')
+            chat_cmd(
+                top_k=args.top_k,
+                profile=args.profile,
+                explain=args.explain,
+                use_llm=not args.no_llm,
+                debug=args.debug,
+                level=args.level,
+                modalities=args.modality,
+                track=track,
+                stream=not args.no_stream,
+            )
+            return
         ask_cmd(
-            args.query,
+            query,
             top_k=args.top_k,
             profile=args.profile,
             explain=args.explain,

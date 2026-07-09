@@ -176,6 +176,17 @@ def get_min_evidence_score() -> float:
         return 0.15
 
 
+def get_chat_context_turns() -> int:
+    """Max prior (question, answer) turns carried into each interactive-ask
+    turn's prompt. Oldest turns are evicted deterministically past the cap;
+    0 disables carried context entirely."""
+    raw = os.getenv("CMRAG_CHAT_CONTEXT_TURNS", "8").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 8
+
+
 def get_numbered_env_paths(prefix: str) -> list[Path]:
     pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)$")
     indexed: list[tuple[int, Path]] = []

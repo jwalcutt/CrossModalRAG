@@ -161,6 +161,7 @@ def stream_answer_events(
     matched_nodes,
     use_llm: bool = True,
     start: float | None = None,
+    history: str | None = None,
 ):
     """DB-free core of :func:`answer_stream_events`, fed with already-retrieved evidence.
 
@@ -169,13 +170,17 @@ def stream_answer_events(
     exactly the API streaming-response situation: the ASGI server iterates
     (and, on client disconnect, closes) the generator on arbitrary worker
     threads, while sqlite connections are bound to their creating thread.
+
+    ``history`` is an optional pre-rendered conversation block
+    (``chat.render_history``) threaded into the synthesis prompt for
+    multi-turn sessions; ``None`` is byte-identical to single-turn.
     """
     start = time.monotonic() if start is None else start
     provider = get_default_llm_provider() if use_llm else None
     if provider is not None:
         gen = None
         try:
-            stream = synthesize_answer_stream(query, hits, provider)
+            stream = synthesize_answer_stream(query, hits, provider, history=history)
             while True:
                 try:
                     fragment = next(stream)
