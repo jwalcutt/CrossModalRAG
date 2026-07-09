@@ -304,8 +304,8 @@ a { color: var(--amber); text-underline-offset: 3px; }
 .toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-dim); font-size: 13px; user-select: none; }
 .toggle input { accent-color: var(--amber); width: 15px; height: 15px; }
 
-.answer-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 40px; align-items: start; }
-@media (max-width: 940px) { .answer-grid { grid-template-columns: 1fr; gap: 28px; } }
+/* The response block stacks: answer prose first, its evidence ledger directly beneath. */
+.answer-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 36px; align-items: start; }
 
 .answer-block { min-width: 0; }
 .answer-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
@@ -443,7 +443,21 @@ a { color: var(--amber); text-underline-offset: 3px; }
 }
 .abstain b { color: var(--oxblood); font-style: normal; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; display: block; margin-bottom: 6px; }
 
-/* evidence ledger */
+/* evidence ledger (below the answer, inside the response block) */
+.ledger { min-width: 0; }
+.ledger-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  gap: 12px;
+  padding-top: 14px;
+}
+.ledger-grid .evidence {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.ledger-grid .evidence.cited { border-color: rgba(227, 168, 60, 0.35); }
+
 .ledger-head {
   font-family: var(--font-mono);
   font-size: 11px;

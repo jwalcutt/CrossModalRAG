@@ -289,48 +289,50 @@ export function AskView({ health }: ViewProps) {
               )}
             </section>
 
-            <aside aria-label="Evidence">
+            <section aria-label="Evidence ledger" className="ledger">
               <div className="ledger-head">
                 <span>Evidence ledger</span>
                 <span className="num">{result.evidence.length}</span>
               </div>
               {result.evidence.length === 0 && <p className="faint" style={{ paddingTop: 14 }}>No evidence retrieved.</p>}
-              {result.evidence.map((ev) => (
-                <article
-                  key={ev.evidence_id}
-                  ref={(el) => { evidenceRefs.current[ev.evidence_id] = el; }}
-                  className={`evidence ${ev.cited ? "cited" : ""} ${flash === ev.evidence_id ? "flash" : ""}`}
-                >
-                  <div className="ev-top">
-                    <span className={`ev-id ${ev.cited ? "" : "dim"}`} translate="no">
-                      {ev.evidence_id}
-                    </span>
-                    <span className="ev-title">{ev.title || fileName(ev.source_uri)}</span>
-                  </div>
-                  <div className="ev-locator mono" translate="no" title={ev.source_uri}>
-                    {ev.locator}
-                  </div>
-                  <div className="ev-tags">
-                    {ev.modality && <span className="tag mod">{ev.modality}</span>}
-                    <span className="tag">{ev.source_type}</span>
-                    {ev.ocr_confidence != null && (
-                      <span className="tag">ocr {(ev.ocr_confidence * 100).toFixed(0)}%</span>
-                    )}
-                  </div>
-                  {ev.excerpt && <p className="ev-excerpt">{ev.excerpt}</p>}
-                  <div className="ev-scores">
-                    {(["vector", "lexical", "recency"] as const).map((k) => (
-                      <div className="score" key={k}>
-                        <div className="score-k">{k}</div>
-                        <div className="score-bar">
-                          <i style={{ width: `${Math.max(0, Math.min(1, ev.scores[k])) * 100}%` }} />
+              <div className="ledger-grid">
+                {result.evidence.map((ev) => (
+                  <article
+                    key={ev.evidence_id}
+                    ref={(el) => { evidenceRefs.current[ev.evidence_id] = el; }}
+                    className={`evidence ${ev.cited ? "cited" : ""} ${flash === ev.evidence_id ? "flash" : ""}`}
+                  >
+                    <div className="ev-top">
+                      <span className={`ev-id ${ev.cited ? "" : "dim"}`} translate="no">
+                        {ev.evidence_id}
+                      </span>
+                      <span className="ev-title">{ev.title || fileName(ev.source_uri)}</span>
+                    </div>
+                    <div className="ev-locator mono" translate="no" title={ev.source_uri}>
+                      {ev.locator}
+                    </div>
+                    <div className="ev-tags">
+                      {ev.modality && <span className="tag mod">{ev.modality}</span>}
+                      <span className="tag">{ev.source_type}</span>
+                      {ev.ocr_confidence != null && (
+                        <span className="tag">ocr {(ev.ocr_confidence * 100).toFixed(0)}%</span>
+                      )}
+                    </div>
+                    {ev.excerpt && <p className="ev-excerpt">{ev.excerpt}</p>}
+                    <div className="ev-scores">
+                      {(["vector", "lexical", "recency"] as const).map((k) => (
+                        <div className="score" key={k}>
+                          <div className="score-k">{k}</div>
+                          <div className="score-bar">
+                            <i style={{ width: `${Math.max(0, Math.min(1, ev.scores[k])) * 100}%` }} />
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                </article>
-              ))}
-            </aside>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
           </div>
         )}
       </div>
