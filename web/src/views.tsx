@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { motion } from "motion/react";
+import { AnswerMarkdown } from "./markdown";
 import {
   api,
   type AnswerPayload,
@@ -243,10 +244,10 @@ export function AskView({ health }: ViewProps) {
                 <span className="badge model">synthesizing…</span>
               </div>
               {liveText ? (
-                <p className="answer-prose text-pretty">
-                  <Answer text={liveText} onCite={() => undefined} />
+                <div className="answer-prose text-pretty">
+                  <AnswerMarkdown text={liveText} onCite={() => undefined} />
                   <span className="stream-cursor" aria-hidden="true" />
-                </p>
+                </div>
               ) : (
                 <p className="muted">
                   Retrieving evidence… <span className="stream-cursor" aria-hidden="true" />
@@ -278,9 +279,9 @@ export function AskView({ health }: ViewProps) {
                     "The retrieved evidence was too weak to answer confidently — so the engine declines rather than guess."}
                 </div>
               ) : result.answer ? (
-                <p className="answer-prose text-pretty">
-                  <Answer text={result.answer} onCite={jumpToEvidence} />
-                </p>
+                <div className="answer-prose text-pretty">
+                  <AnswerMarkdown text={result.answer} onCite={jumpToEvidence} />
+                </div>
               ) : (
                 <p className="muted">
                   No synthesized answer — browse the retrieved evidence ledger.
@@ -333,26 +334,6 @@ export function AskView({ health }: ViewProps) {
           </div>
         )}
       </div>
-    </>
-  );
-}
-
-function Answer({ text, onCite }: { text: string; onCite: (id: string) => void }) {
-  const parts = useMemo(() => text.split(/(\[E\d+\])/g), [text]);
-  return (
-    <>
-      {parts.map((part, i) => {
-        const m = part.match(/^\[E(\d+)\]$/);
-        if (m) {
-          const id = `E${m[1]}`;
-          return (
-            <button key={i} type="button" className="cite" onClick={() => onCite(id)} translate="no">
-              {id}
-            </button>
-          );
-        }
-        return <span key={i}>{part}</span>;
-      })}
     </>
   );
 }

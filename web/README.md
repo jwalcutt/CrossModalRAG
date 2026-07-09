@@ -14,6 +14,7 @@ The build output is committed to `../src/crossmodalrag/api/static/` and served b
 ```bash
 npm install
 npm run build      # -> ../src/crossmodalrag/api/static/  (commit the result)
+npm test           # vitest unit tests (markdown/citation rendering)
 ```
 
 ## Develop
@@ -31,4 +32,9 @@ npm run dev                    # http://localhost:5173
 - `src/api.ts` — typed client over the local endpoints (same-origin `fetch`).
 - `src/App.tsx` — app shell: sidebar nav, engine status, hash-routed sections.
 - `src/views.tsx` — the views (Ask, Concepts, Timeline, Drift, Forgetting/Recall, Status).
+- `src/markdown.tsx` — markdown rendering for synthesized answers: `marked` → DOMPurify (strict
+  tag/attr allowlist; LLM output is untrusted, raw HTML is stripped) → React, with `[E#]` citation
+  tokens turned into clickable chips *after* sanitization (so chips can only come from our own
+  transform, and a literal `[E#]` inside code stays code). Both libraries are vendored into the
+  bundle — no CDN. Streaming re-renders the accumulated markdown per token.
 - `src/styles.css` — the design system (an "archival instrument" theme: warm charcoal, ink, amber).
