@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { motion } from "motion/react";
+import { AnswerMarkdown } from "./markdown";
 import {
   api,
   type AnswerPayload,
@@ -243,10 +244,10 @@ export function AskView({ health }: ViewProps) {
                 <span className="badge model">synthesizing…</span>
               </div>
               {liveText ? (
-                <p className="answer-prose text-pretty">
-                  <Answer text={liveText} onCite={() => undefined} />
+                <div className="answer-prose text-pretty">
+                  <AnswerMarkdown text={liveText} onCite={() => undefined} />
                   <span className="stream-cursor" aria-hidden="true" />
-                </p>
+                </div>
               ) : (
                 <p className="muted">
                   Retrieving evidence… <span className="stream-cursor" aria-hidden="true" />
@@ -278,9 +279,9 @@ export function AskView({ health }: ViewProps) {
                     "The retrieved evidence was too weak to answer confidently — so the engine declines rather than guess."}
                 </div>
               ) : result.answer ? (
-                <p className="answer-prose text-pretty">
-                  <Answer text={result.answer} onCite={jumpToEvidence} />
-                </p>
+                <div className="answer-prose text-pretty">
+                  <AnswerMarkdown text={result.answer} onCite={jumpToEvidence} />
+                </div>
               ) : (
                 <p className="muted">
                   No synthesized answer — browse the retrieved evidence ledger.
@@ -288,71 +289,53 @@ export function AskView({ health }: ViewProps) {
               )}
             </section>
 
-            <aside aria-label="Evidence">
+            <section aria-label="Evidence ledger" className="ledger">
               <div className="ledger-head">
                 <span>Evidence ledger</span>
                 <span className="num">{result.evidence.length}</span>
               </div>
               {result.evidence.length === 0 && <p className="faint" style={{ paddingTop: 14 }}>No evidence retrieved.</p>}
-              {result.evidence.map((ev) => (
-                <article
-                  key={ev.evidence_id}
-                  ref={(el) => { evidenceRefs.current[ev.evidence_id] = el; }}
-                  className={`evidence ${ev.cited ? "cited" : ""} ${flash === ev.evidence_id ? "flash" : ""}`}
-                >
-                  <div className="ev-top">
-                    <span className={`ev-id ${ev.cited ? "" : "dim"}`} translate="no">
-                      {ev.evidence_id}
-                    </span>
-                    <span className="ev-title">{ev.title || fileName(ev.source_uri)}</span>
-                  </div>
-                  <div className="ev-locator mono" translate="no" title={ev.source_uri}>
-                    {ev.locator}
-                  </div>
-                  <div className="ev-tags">
-                    {ev.modality && <span className="tag mod">{ev.modality}</span>}
-                    <span className="tag">{ev.source_type}</span>
-                    {ev.ocr_confidence != null && (
-                      <span className="tag">ocr {(ev.ocr_confidence * 100).toFixed(0)}%</span>
-                    )}
-                  </div>
-                  {ev.excerpt && <p className="ev-excerpt">{ev.excerpt}</p>}
-                  <div className="ev-scores">
-                    {(["vector", "lexical", "recency"] as const).map((k) => (
-                      <div className="score" key={k}>
-                        <div className="score-k">{k}</div>
-                        <div className="score-bar">
-                          <i style={{ width: `${Math.max(0, Math.min(1, ev.scores[k])) * 100}%` }} />
+              <div className="ledger-grid">
+                {result.evidence.map((ev) => (
+                  <article
+                    key={ev.evidence_id}
+                    ref={(el) => { evidenceRefs.current[ev.evidence_id] = el; }}
+                    className={`evidence ${ev.cited ? "cited" : ""} ${flash === ev.evidence_id ? "flash" : ""}`}
+                  >
+                    <div className="ev-top">
+                      <span className={`ev-id ${ev.cited ? "" : "dim"}`} translate="no">
+                        {ev.evidence_id}
+                      </span>
+                      <span className="ev-title">{ev.title || fileName(ev.source_uri)}</span>
+                    </div>
+                    <div className="ev-locator mono" translate="no" title={ev.source_uri}>
+                      {ev.locator}
+                    </div>
+                    <div className="ev-tags">
+                      {ev.modality && <span className="tag mod">{ev.modality}</span>}
+                      <span className="tag">{ev.source_type}</span>
+                      {ev.ocr_confidence != null && (
+                        <span className="tag">ocr {(ev.ocr_confidence * 100).toFixed(0)}%</span>
+                      )}
+                    </div>
+                    {ev.excerpt && <p className="ev-excerpt">{ev.excerpt}</p>}
+                    <div className="ev-scores">
+                      {(["vector", "lexical", "recency"] as const).map((k) => (
+                        <div className="score" key={k}>
+                          <div className="score-k">{k}</div>
+                          <div className="score-bar">
+                            <i style={{ width: `${Math.max(0, Math.min(1, ev.scores[k])) * 100}%` }} />
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                </article>
-              ))}
-            </aside>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
           </div>
         )}
       </div>
-    </>
-  );
-}
-
-function Answer({ text, onCite }: { text: string; onCite: (id: string) => void }) {
-  const parts = useMemo(() => text.split(/(\[E\d+\])/g), [text]);
-  return (
-    <>
-      {parts.map((part, i) => {
-        const m = part.match(/^\[E(\d+)\]$/);
-        if (m) {
-          const id = `E${m[1]}`;
-          return (
-            <button key={i} type="button" className="cite" onClick={() => onCite(id)} translate="no">
-              {id}
-            </button>
-          );
-        }
-        return <span key={i}>{part}</span>;
-      })}
     </>
   );
 }

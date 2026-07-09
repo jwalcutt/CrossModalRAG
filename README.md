@@ -11,8 +11,9 @@ Current scope:
 - Create structure-aware searchable chunks from evidence.
 - Query with a hybrid (semantic vector + lexical + recency) retriever and get cited evidence.
 - Optional local embeddings via `fastembed` (no torch); falls back to lexical when not installed.
-- Synthesize grounded answers with a local LLM (Ollama) constrained to and citing the evidence,
-abstaining when evidence is weak; falls back to a deterministic template when Ollama is absent.
+- Synthesize direct, grounded answers with a local LLM (Ollama) that treat the retrieved evidence
+as the record of your own experience and cite it inline, abstaining when evidence is weak; falls
+back to a deterministic template when Ollama is absent.
 
 
 
@@ -165,10 +166,13 @@ means you should re-run this command.
 mem ask "Why did I change the parser?" --top-k 5 --profile relevant --explain
 ```
 
-By default `mem ask` synthesizes a grounded answer with a local LLM via Ollama, constrained to
-the retrieved evidence and citing it inline as `[E#]` — integrating across all materially
+By default `mem ask` synthesizes a grounded answer with a local LLM via Ollama, treating the
+retrieved evidence as the authoritative record of your own experience: every claim about your
+work, history, or notes cites its evidence inline as `[E#]`, integrating across all materially
 relevant evidence items (multi-citing sources that independently agree) rather than answering
-from the single top hit. If retrieval is too weak (top score below
+from the single top hit. The model may draw on general knowledge to explain and connect the
+evidence — never presented as coming from your records, and never as grounds to answer a
+question your records don't address. If retrieval is too weak (top score below
 `CMRAG_MIN_EVIDENCE_SCORE`) it abstains instead of guessing; when the evidence only partially
 covers the question it answers what the evidence supports and states what it doesn't cover,
 rather than refusing outright. Every abstention carries a reason — `weak_retrieval` (the gate

@@ -304,8 +304,8 @@ a { color: var(--amber); text-underline-offset: 3px; }
 .toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-dim); font-size: 13px; user-select: none; }
 .toggle input { accent-color: var(--amber); width: 15px; height: 15px; }
 
-.answer-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 40px; align-items: start; }
-@media (max-width: 940px) { .answer-grid { grid-template-columns: 1fr; gap: 28px; } }
+/* The response block stacks: answer prose first, its evidence ledger directly beneath. */
+.answer-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 36px; align-items: start; }
 
 .answer-block { min-width: 0; }
 .answer-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
@@ -327,7 +327,80 @@ a { color: var(--amber); text-underline-offset: 3px; }
   line-height: 1.5;
   letter-spacing: -0.005em;
   color: var(--paper);
-  white-space: pre-wrap;
+}
+
+/* Markdown elements inside a synthesized answer (rendered via AnswerMarkdown:
+   marked -> DOMPurify allowlist -> React; [E#] chips survive the transform). */
+.answer-prose > *:first-child { margin-top: 0; }
+.answer-prose > *:last-child { margin-bottom: 0; }
+.answer-prose p { margin: 0.55em 0; }
+.answer-prose h1, .answer-prose h2, .answer-prose h3,
+.answer-prose h4, .answer-prose h5, .answer-prose h6 {
+  font-family: var(--font-display);
+  font-weight: 520;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin: 1em 0 0.4em;
+}
+.answer-prose h1 { font-size: 1.18em; }
+.answer-prose h2 { font-size: 1.12em; }
+.answer-prose h3 { font-size: 1.05em; }
+.answer-prose h4, .answer-prose h5, .answer-prose h6 { font-size: 1em; }
+.answer-prose ul, .answer-prose ol { margin: 0.55em 0; padding-left: 1.35em; }
+.answer-prose li { margin: 0.25em 0; }
+.answer-prose li::marker { color: var(--ink-faint); }
+.answer-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.answer-prose pre {
+  margin: 0.7em 0;
+  padding: 14px 16px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+.answer-prose pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.68em;
+  line-height: 1.55;
+  white-space: pre;
+}
+.answer-prose blockquote {
+  margin: 0.7em 0;
+  padding: 2px 0 2px 16px;
+  border-left: 2px solid var(--amber);
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.answer-prose hr { border: 0; border-top: 1px solid var(--rule-strong); margin: 1em 0; }
+.answer-prose a { color: var(--amber); text-decoration: underline; text-underline-offset: 3px; }
+.answer-prose table {
+  border-collapse: collapse;
+  margin: 0.7em 0;
+  font-size: 0.78em;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.answer-prose th, .answer-prose td {
+  border: 1px solid var(--rule-strong);
+  padding: 6px 12px;
+  text-align: left;
+}
+.answer-prose th {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
 }
 .answer-prose .cite {
   font-family: var(--font-mono);
@@ -370,7 +443,21 @@ a { color: var(--amber); text-underline-offset: 3px; }
 }
 .abstain b { color: var(--oxblood); font-style: normal; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; display: block; margin-bottom: 6px; }
 
-/* evidence ledger */
+/* evidence ledger (below the answer, inside the response block) */
+.ledger { min-width: 0; }
+.ledger-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  gap: 12px;
+  padding-top: 14px;
+}
+.ledger-grid .evidence {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.ledger-grid .evidence.cited { border-color: rgba(227, 168, 60, 0.35); }
+
 .ledger-head {
   font-family: var(--font-mono);
   font-size: 11px;
