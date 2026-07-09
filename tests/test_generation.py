@@ -428,6 +428,26 @@ def test_breadth_instruction_present_in_system_prompt() -> None:
     assert "Never cite an item that did not contribute" in SYSTEM_PROMPT
 
 
+# --- Synthesis rebalancing: experience-aware answers ------------------------------------
+
+
+def test_experience_aware_instruction_present_in_system_prompt() -> None:
+    # Direct, experience-aware synthesis: general knowledge is permitted but
+    # subordinate — never conflated with the user's records, never a substitute
+    # for evidence, and never grounds to answer an unanswerable query.
+    from crossmodalrag.generate.synthesize import SYSTEM_PROMPT
+
+    assert "authoritative record" in SYSTEM_PROMPT
+    assert "never invent personal history" in SYSTEM_PROMPT
+    # Knowledge can answer conceptual sub-questions but never fabricates history:
+    assert "conceptual parts of the question" in SYSTEM_PROMPT
+    assert "General knowledge alone never justifies a claim about the user's history" in SYSTEM_PROMPT
+    # The boxing-in clause must stay gone (the rebalancing itself):
+    assert "Do not use any outside knowledge" not in SYSTEM_PROMPT
+    # Evidence-derived claims still carry mandatory citation:
+    assert "MUST cite" in SYSTEM_PROMPT
+
+
 def test_source_coverage_counts_distinct_sources_not_citations(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
     conn = connect(tmp_path / "memory.db")
