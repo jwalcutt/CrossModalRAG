@@ -73,6 +73,7 @@ export function ChatView({
   // Route changes: load the stored conversation (or reset for a fresh chat).
   useEffect(() => {
     if (conversationId === activeId.current) return;
+    const previousId = activeId.current;
     activeId.current = conversationId;
     setError(null);
     setLiveText(null);
@@ -94,6 +95,9 @@ export function ChatView({
       .finally(() => alive && setLoadingStored(false));
     return () => {
       alive = false;
+      // Revert the ref so a re-run of this effect (StrictMode dev double-invoke)
+      // doesn't early-return and strand the loading state.
+      activeId.current = previousId;
     };
   }, [conversationId]);
 
@@ -171,90 +175,117 @@ export function ChatView({
 
   const empty = messages.length === 0 && liveText === null && !loadingStored;
 
+  const composer = (
+    <form className={`chat-composer${empty ? " chat-composer--hero" : ""}`} onSubmit={send}>
+      {saveDisabled && (
+        <p className="composer-note">
+          History saving is off — context will not carry between messages.
+        </p>
+      )}
+      <div className="composer-field">
+        <textarea
+          ref={inputRef}
+          className="composer-input"
+          rows={1}
+          value={input}
+          placeholder={conversationId ? "Continue the conversation…" : "Ask your archive…"}
+          aria-label="Message"
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={onComposerKey}
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus
+        />
+        <button
+          className={`composer-send${input.trim() && !busy ? " glow" : ""}`}
+          type="submit"
+          disabled={busy || !input.trim()}
+          aria-label="Send"
+          title="Send"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 19V5" />
+            <path d="m5 12 7-7 7 7" />
+          </svg>
+        </button>
+      </div>
+    </form>
+  );
+
   return (
     <div className="chat-wrap">
-      <header className="chat-head">
-        <div className="eyebrow">{conversationId ? "Saved conversation" : "Grounded chat"}</div>
-        <h1 className="chat-title text-pretty">
-          {title ?? (
-            <>
-              Ask the <em>archive</em>
-            </>
-          )}
-        </h1>
-      </header>
+      {!empty && (
+        <header className="chat-head">
+          <div className="eyebrow">{conversationId ? "Saved conversation" : "Grounded chat"}</div>
+          <h1 className="chat-title text-pretty">
+            {title ?? (
+              <>
+                Ask the <em>archive</em>
+              </>
+            )}
+          </h1>
+        </header>
+      )}
 
-      <div className="chat-thread" aria-live="polite">
-        {loadingStored && <p className="loading">Opening conversation…</p>}
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        {empty && (
-          <div className="chat-empty">
-            <h2>A conversation with your own record</h2>
-            <p className="muted text-pretty">
-              Every reply is retrieved from and cited against your notes, commits, and documents —
-              and the thread remembers itself. Follow-ups like “expand on that” just work.
+      {empty ? (
+        <div className="chat-hero">
+          {error && (
+            <p className="error" role="alert">
+              {error}
             </p>
-          </div>
-        )}
-        {messages.map((m, i) =>
-          m.role === "user" ? (
-            <UserMessage key={i} text={m.text} />
-          ) : (
-            <AssistantMessage key={i} message={m} />
-          ),
-        )}
-        {liveText !== null && (
-          <article className="msg msg-assistant">
-            <div className="answer-meta">
-              <span className="badge model">synthesizing…</span>
-            </div>
-            {liveText ? (
-              <div className="answer-prose text-pretty">
-                <AnswerMarkdown text={liveText} onCite={() => undefined} />
-                <span className="stream-cursor" aria-hidden="true" />
-              </div>
-            ) : (
-              <p className="muted">
-                Retrieving evidence… <span className="stream-cursor" aria-hidden="true" />
+          )}
+          <h2 className="chat-hero-title">
+            Start a <em>Conversation</em>
+          </h2>
+          {composer}
+        </div>
+      ) : (
+        <>
+          <div className="chat-thread" aria-live="polite">
+            {loadingStored && <p className="loading">Opening conversation…</p>}
+            {error && (
+              <p className="error" role="alert">
+                {error}
               </p>
             )}
-          </article>
-        )}
-        <div ref={endRef} />
-      </div>
-
-      <form className="chat-composer" onSubmit={send}>
-        {saveDisabled && (
-          <p className="composer-note">
-            History saving is off — context will not carry between messages.
-          </p>
-        )}
-        <div className="composer-row">
-          <textarea
-            ref={inputRef}
-            className="composer-input"
-            rows={1}
-            value={input}
-            placeholder={conversationId ? "Continue the conversation…" : "Ask your archive…"}
-            aria-label="Message"
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onComposerKey}
-            // eslint-disable-next-line jsx-a11y/no-autofocus
-            autoFocus
-          />
-          <button className="btn primary" type="submit" disabled={busy || !input.trim()}>
-            {busy ? "…" : "Send"}
-          </button>
-        </div>
-        <p className="composer-hint">
-          Enter to send · Shift+Enter for a new line · citations always come from the current
-          turn’s evidence
-        </p>
-      </form>
+            {messages.map((m, i) =>
+              m.role === "user" ? (
+                <UserMessage key={i} text={m.text} />
+              ) : (
+                <AssistantMessage key={i} message={m} />
+              ),
+            )}
+            {liveText !== null && (
+              <article className="msg msg-assistant">
+                <div className="answer-meta">
+                  <span className="badge model">synthesizing…</span>
+                </div>
+                {liveText ? (
+                  <div className="answer-prose text-pretty">
+                    <AnswerMarkdown text={liveText} onCite={() => undefined} />
+                    <span className="stream-cursor" aria-hidden="true" />
+                  </div>
+                ) : (
+                  <p className="muted">
+                    Retrieving evidence… <span className="stream-cursor" aria-hidden="true" />
+                  </p>
+                )}
+              </article>
+            )}
+            <div ref={endRef} />
+          </div>
+          {composer}
+        </>
+      )}
     </div>
   );
 }
