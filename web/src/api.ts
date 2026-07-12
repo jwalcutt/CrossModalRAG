@@ -49,6 +49,28 @@ export interface RecallCard {
   question: string; answer: string | null; risk: number; confidence: number;
   generated_by: string; evidence_source_uris: string[];
 }
+export interface ConversationSummary {
+  id: number;
+  started_at: string;
+  updated_at: string;
+  title: string | null;
+  message_count: number;
+}
+export interface ChatMessagePayload {
+  id: number;
+  role: "user" | "assistant";
+  turn_index: number;
+  text: string;
+  abstention_reason: string | null;
+  truncated: boolean;
+  model: string | null;
+  created_at: string;
+  /** Point-in-time evidence ledger snapshot (assistant messages only). */
+  evidence: EvidenceItem[] | null;
+}
+export interface ConversationDetail extends ConversationSummary {
+  messages: ChatMessagePayload[];
+}
 export interface Health {
   db: { path: string; exists: boolean; size_bytes: number };
   extras: { embeddings: boolean; pdf: boolean; ocr: boolean };
@@ -132,10 +154,77 @@ async function askStream(q: string, opts: AskOpts, onToken: (text: string) => vo
   return final;
 }
 
+export interface ChatTurnResult {
+  payload: AnswerPayload;
+  conversationId: number | null;
+  conversation: ConversationSummary | null;
+}
+
+export type ChatOpts = AskOpts & { save?: boolean };
+
+// One persisted multi-turn chat turn (POST /chat/stream, NDJSON): token events fire
+// `onToken`; the final event carries the answer payload plus the conversation the
+// turn was saved into (null when history saving is off).
+async function chatStream(
+  q: string,
+  conversationId: number | null,
+  opts: ChatOpts,
+  onToken: (text: string) => void,
+): Promise<ChatTurnResult> {
+  const res = await fetch("/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ q, conversation_id: conversationId ?? undefined, ...opts }),
+  });
+  if (!res.ok) await throwHttpError(res);
+  if (!res.body) throw new Error("Streaming not supported by this browser.");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: ChatTurnResult | null = null;
+
+  const handleLine = (line: string) => {
+    if (!line) return;
+    const event = JSON.parse(line) as
+      | { type: "token"; text: string }
+      | { type: "answer"; data: AnswerPayload; conversation_id: number | null; conversation?: ConversationSummary };
+    if (event.type === "token") onToken(event.text);
+    else
+      result = {
+        payload: event.data,
+        conversationId: event.conversation_id,
+        conversation: event.conversation ?? null,
+      };
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      handleLine(buffer.slice(0, nl).trim());
+      buffer = buffer.slice(nl + 1);
+    }
+  }
+  handleLine(buffer.trim());
+
+  if (!result) throw new Error("Chat stream ended without a final answer event.");
+  return result;
+}
+
 export const api = {
   health: () => get<Health>("/health"),
   ask: (q: string, opts: AskOpts) => get<AnswerPayload>("/ask", { q, ...opts }),
   askStream,
+  chatStream,
+  conversations: (top = 30) =>
+    get<{ save_enabled: boolean; total: number; conversations: ConversationSummary[] }>(
+      "/conversations",
+      { top },
+    ),
+  conversation: (id: number) => get<ConversationDetail>(`/conversations/${id}`),
   concepts: (top = 40) => get<{ concepts: ConceptView[] }>("/concepts", { top }),
   timeline: (limit = 80) => get<{ timeline: EpisodeView[] }>("/timeline", { limit }),
   memoryStats: () => get<MemoryStats>("/memory-stats"),

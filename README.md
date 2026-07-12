@@ -442,9 +442,14 @@ so the CLI and any future API/UI render exactly the same payloads.
 
 ### Web UI & local API (`mem serve`)
 
-`mem serve` runs a **local, read-only HTTP API** *and* serves a **web console** (a memory dashboard:
-ask with claim → exact-evidence drill-down, browse concepts, timeline, concept-drift movement, and
-forgetting/recall). It requires the opt-in `[ui]` extra (`pip install -e ".[ui]"`, adds FastAPI +
+`mem serve` runs a **local HTTP API** *and* serves a **web console** whose primary surface is a
+**grounded chat**: multi-turn conversations with carried context, each saved conversation at its
+own route (navigable and resumable from the sidebar's history panel, auto-titled by the local
+LLM), user messages and cited assistant replies above a bottom composer, and a per-message
+evidence ledger with claim → exact-evidence drill-down. Retrieval/generation parameters (profile,
+memory level, evidence per turn, synthesis, history saving) are consolidated on a Settings page.
+The console also keeps the read views: concepts, timeline, concept-drift movement, and
+forgetting/recall. It requires the opt-in `[ui]` extra (`pip install -e ".[ui]"`, adds FastAPI +
 uvicorn) and **binds** `127.0.0.1` **by default** — no auth on loopback, nothing leaves the machine, all
 assets (including fonts) vendored. Without the extra, `mem serve` exits with an install hint.
 
@@ -454,11 +459,16 @@ mem serve                       # web UI + API at http://127.0.0.1:8765  (Ctrl-C
 # then open http://127.0.0.1:8765 in a browser
 ```
 
-The API routes are **GET, read-only** (no writes; `/ask` does not record usage): `/health`, `/ask`,
-`/concepts`, `/timeline`, `/memory-stats`, `/forgetting`, `/recall`, `/drift`, `/distill`, `/usage` —
-each returns exactly the corresponding `--json` payload. The web console is served at `/`; interactive
-API docs are at `/docs`. Use `--host`/`--port` to change the bind; binding to a non-loopback `--host`
-exposes the unauthenticated API on your network and is warned against.
+The API is **read-first**: every memory/engine route is GET and read-only (no writes; `/ask` does
+not record usage): `/health`, `/ask`, `/conversations`, `/conversations/{id}`, `/concepts`,
+`/timeline`, `/memory-stats`, `/forgetting`, `/recall`, `/drift`, `/distill`, `/usage` — each
+returns exactly the corresponding `--json` payload. The **single, explicit write path** is
+`POST /chat/stream` (the web chat): one persisted multi-turn chat turn (NDJSON token events, then
+a final answer event carrying the conversation id) whose only write is appending to the
+user-owned chat-history tables — the same store as `mem chat`, respecting `CMRAG_SAVE_HISTORY`
+and a per-request `save` flag, wipeable with `mem history --clear`. The web console is served at
+`/`; interactive API docs are at `/docs`. Use `--host`/`--port` to change the bind; binding to a
+non-loopback `--host` exposes the unauthenticated API on your network and is warned against.
 
 `/ask/stream` is the streaming variant of `/ask` (the console's Ask view uses it when synthesis is
 on): NDJSON events — `{"type":"token","text":…}` per generated fragment, then one final

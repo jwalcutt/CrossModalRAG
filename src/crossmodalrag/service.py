@@ -203,6 +203,147 @@ def stream_answer_events(
     yield {"type": "answer", "data": data}
 
 
+class ConversationNotFound(LookupError):
+    """Raised when a chat turn or read targets a conversation id that doesn't exist."""
+
+
+def conversations_payload(conn: sqlite3.Connection, *, top: int | None = None) -> dict:
+    """The `mem history --json` list contract (shared verbatim by GET /conversations)."""
+    from crossmodalrag.config import save_history_enabled
+    from crossmodalrag.conversations.contract import conversation_to_dict
+    from crossmodalrag.conversations.store import list_conversations
+
+    return {
+        "save_enabled": save_history_enabled(),
+        "total": len(list_conversations(conn)),
+        "conversations": [
+            conversation_to_dict(conn, c, include_messages=False)
+            for c in list_conversations(conn, top=top)
+        ],
+    }
+
+
+def conversation_payload(conn: sqlite3.Connection, conversation_id: int) -> dict:
+    """One conversation with its ordered messages (GET /conversations/{id})."""
+    from crossmodalrag.conversations.contract import conversation_to_dict
+    from crossmodalrag.conversations.store import get_conversation
+
+    conversation = get_conversation(conn, conversation_id)
+    if conversation is None:
+        raise ConversationNotFound(f"No saved conversation with id {conversation_id}.")
+    return conversation_to_dict(conn, conversation)
+
+
+def chat_stream_events(
+    *,
+    query: str,
+    conversation_id: int | None = None,
+    top_k: int = 5,
+    profile: str = DEFAULT_PROFILE,
+    level: str = "evidence",
+    modalities: list[str] | None = None,
+    use_llm: bool = True,
+    save: bool = True,
+):
+    """One persisted multi-turn chat turn as an NDJSON-able event stream (the web chat).
+
+    The server-side twin of the CLI chat loop: resumes the stored conversation's
+    context (`turns_from_messages` + the session cap), retrieves independently for
+    THIS turn, streams tokens, then persists the turn — including abstained ones —
+    via `SessionRecorder` (best-effort, auto-titled on first turn). Yields
+    `{"type":"token",...}` events then one final
+    `{"type":"answer","data":…, "conversation_id":…, "conversation":…}` event;
+    `conversation_id` is None when saving is disabled (context is then not carried
+    server-side) or the turn wasn't persisted (template path).
+
+    Setup (resume + retrieval, including the ConversationNotFound check) runs
+    EAGERLY on the caller's thread with a connection opened and closed here;
+    the returned generator holds no sqlite objects (the recorder opens its own
+    per-call connection), so it may be consumed from any worker thread.
+    """
+    from crossmodalrag.chat import ChatSession, render_history
+    from crossmodalrag.config import save_history_enabled
+    from crossmodalrag.conversations.contract import conversation_to_dict
+    from crossmodalrag.conversations.naming import generate_conversation_title
+    from crossmodalrag.conversations.recorder import SessionRecorder
+    from crossmodalrag.conversations.resume import next_turn_index, turns_from_messages
+    from crossmodalrag.conversations.store import get_conversation, list_messages
+
+    start = time.monotonic()
+    db_path = get_db_path()
+    saving = save and save_history_enabled()
+
+    history = None
+    resume_index = 0
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        if conversation_id is not None:
+            if get_conversation(conn, conversation_id) is None:
+                raise ConversationNotFound(f"No saved conversation with id {conversation_id}.")
+            messages = list_messages(conn, conversation_id)
+            session = ChatSession()
+            for turn in turns_from_messages(messages):
+                session.add_turn(turn.query, turn.answer_text)  # context cap applies
+            history = render_history(session.turns) or None
+            resume_index = next_turn_index(messages)
+        hits, matched_nodes = retrieve_for_answer(
+            conn, query=query, top_k=top_k, profile=profile, level=level, modalities=modalities
+        )
+    finally:
+        conn.close()
+
+    def _title_fn(first_query: str, answer_text: str) -> str | None:
+        provider = get_default_llm_provider() if use_llm else None
+        if provider is None:
+            return None
+        return generate_conversation_title(provider, query=first_query, answer_text=answer_text)
+
+    recorder = SessionRecorder(db_path, enabled=saving, title_fn=_title_fn)
+    if conversation_id is not None:
+        recorder.attach(conversation_id, next_turn_index=resume_index)
+
+    def _events():
+        provider = get_default_llm_provider() if use_llm else None
+        gen = None
+        if provider is not None:
+            try:
+                stream = synthesize_answer_stream(query, hits, provider, history=history)
+                while True:
+                    try:
+                        fragment = next(stream)
+                    except StopIteration as stop:
+                        gen = stop.value
+                        break
+                    yield {"type": "token", "text": fragment}
+            except LLMUnavailable:
+                pass
+
+        if gen is not None:
+            recorder.record_turn(query, gen)
+            data = generated_answer_to_dict(gen, total_seconds=time.monotonic() - start)
+        else:
+            # Template/no-LLM turns are not persisted (not a synthesized answer).
+            data = template_answer_to_dict(query, hits, total_seconds=time.monotonic() - start)
+        if matched_nodes:
+            data["matched_nodes"] = matched_nodes_payload(matched_nodes)
+
+        final: dict = {"type": "answer", "data": data, "conversation_id": recorder.conversation_id}
+        if recorder.conversation_id is not None:
+            inner = connect(db_path)
+            try:
+                conversation = get_conversation(inner, recorder.conversation_id)
+                if conversation is not None:
+                    final["conversation"] = conversation_to_dict(
+                        inner, conversation, include_messages=False
+                    )
+            finally:
+                inner.close()
+        yield final
+
+    return _events()
+
+
 def ping_ollama() -> bool:
     """Best-effort reachability check for the local Ollama server (never raises)."""
     import urllib.request

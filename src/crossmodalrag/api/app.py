@@ -1,8 +1,12 @@
-"""Local, read-only HTTP API exposing the existing JSON contracts (the UI/Obsidian boundary).
+"""Local HTTP API exposing the existing JSON contracts (the UI/Obsidian boundary).
 
-A thin FastAPI wrapper over the library read functions — it adds no retrieval/derivation logic and
-never writes (GET only; usage tracking off). Requires the opt-in ``[ui]`` extra; the module imports
-without it, and ``create_app`` raises ``MissingUIBackend`` when FastAPI is absent.
+A thin FastAPI wrapper over the library functions — it adds no retrieval/derivation logic.
+Read-first: every memory/engine surface is GET-only and never writes. The single, explicit
+exception is ``POST /chat/stream`` (the web chat), whose only write is appending to the
+user-owned, additive chat-history tables (``conversations``/``messages`` — never ingestion or
+derivation state), respecting ``CMRAG_SAVE_HISTORY`` and the per-request ``save`` flag.
+Requires the opt-in ``[ui]`` extra; the module imports without it, and ``create_app`` raises
+``MissingUIBackend`` when FastAPI is absent.
 """
 
 from __future__ import annotations
@@ -56,7 +60,11 @@ def create_app():
     from crossmodalrag.memory.integrity import memory_stats
     from crossmodalrag.memory.recall import generate_recall_cards, recall_card_to_dict
     from crossmodalrag.service import (
+        ConversationNotFound,
         answer_payload,
+        chat_stream_events,
+        conversation_payload,
+        conversations_payload,
         health_report,
         retrieve_for_answer,
         stream_answer_events,
@@ -131,6 +139,56 @@ def create_app():
             for event in stream_answer_events(
                 query=q, hits=hits, matched_nodes=matched_nodes, use_llm=use_llm, start=start
             ):
+                yield json.dumps(event) + "\n"
+
+        return StreamingResponse(_ndjson(), media_type="application/x-ndjson")
+
+    @app.get("/conversations")
+    def conversations(top: int | None = None) -> dict:
+        with _conn() as conn:
+            return conversations_payload(conn, top=top)
+
+    @app.get("/conversations/{conversation_id}")
+    def conversation(conversation_id: int) -> dict:
+        with _conn() as conn:
+            try:
+                return conversation_payload(conn, conversation_id)
+            except ConversationNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/chat/stream")
+    def chat_stream(body: dict) -> "StreamingResponse":
+        """One persisted multi-turn chat turn (the web chat): NDJSON token events, then a
+        final `{"type":"answer","data":…, "conversation_id":…}` event. The API's single
+        write path — it appends only to the user-owned chat-history tables (see module
+        docstring); pass `"save": false` (or set CMRAG_SAVE_HISTORY=off) to disable, at
+        the cost of server-side context carry."""
+        import json
+
+        from fastapi.responses import StreamingResponse
+
+        q = str(body.get("q") or "").strip()
+        if not q:
+            raise HTTPException(status_code=400, detail="Missing 'q'.")
+        conversation_id = body.get("conversation_id")
+        if conversation_id is not None and not isinstance(conversation_id, int):
+            raise HTTPException(status_code=400, detail="'conversation_id' must be an integer.")
+        try:
+            events = chat_stream_events(
+                query=q,
+                conversation_id=conversation_id,
+                top_k=int(body.get("top_k") or 5),
+                profile=str(body.get("profile") or "balanced"),
+                level=str(body.get("level") or "evidence"),
+                modalities=body.get("modality"),
+                use_llm=bool(body.get("use_llm", True)),
+                save=bool(body.get("save", True)),
+            )
+        except ConversationNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        def _ndjson():
+            for event in events:
                 yield json.dumps(event) + "\n"
 
         return StreamingResponse(_ndjson(), media_type="application/x-ndjson")

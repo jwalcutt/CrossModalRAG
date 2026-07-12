@@ -225,3 +225,116 @@ def test_serve_cmd_translates_missing_backend(monkeypatch):
     monkeypatch.setattr(api, "create_app", _boom)
     with pytest.raises(cli.CLIError):
         cli.serve_cmd()
+
+
+# --- conversations + chat (step 13) --------------------------------------------------------
+
+
+class _ChatStub:
+    name = "stub-chat"
+
+    def generate(self, prompt, system=None):
+        if prompt.startswith("Title this conversation"):
+            return "Parser Bounds Chat"
+        return "Grounded answer [E1]."
+
+    def generate_stream(self, prompt, system=None):
+        if prompt.startswith("Title this conversation"):
+            yield "Parser Bounds Chat"
+            return
+        yield "Grounded "
+        yield "answer [E1]."
+
+
+def _chat_events(client, body):
+    with client.stream("POST", "/chat/stream", json=body) as r:
+        assert r.status_code == 200
+        return [json.loads(line) for line in r.iter_lines() if line]
+
+
+@pytest.fixture
+def chat_env(built_db, monkeypatch):
+    import crossmodalrag.service as svc
+    import crossmodalrag.conversations.recorder as recorder_mod
+
+    monkeypatch.setenv("CMRAG_MIN_EVIDENCE_SCORE", "0.0")
+    monkeypatch.delenv("CMRAG_SAVE_HISTORY", raising=False)
+    monkeypatch.setattr(svc, "get_default_llm_provider", lambda: _ChatStub())
+    return built_db
+
+
+def test_conversations_empty_list(client, chat_env):
+    r = client.get("/conversations")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"save_enabled", "total", "conversations"}
+    assert body["total"] == 0
+
+
+def test_chat_stream_creates_conversation_and_persists(client, chat_env):
+    events = _chat_events(client, {"q": "parser bounds fix?"})
+    assert [e["type"] for e in events] == ["token", "token", "answer"]
+    final = events[-1]
+    assert final["conversation_id"] is not None
+    assert final["conversation"]["title"] == "Parser Bounds Chat"  # LLM-titled
+    assert final["data"]["answer"] == "Grounded answer [E1]."
+
+    cid = final["conversation_id"]
+    r = client.get(f"/conversations/{cid}")
+    assert r.status_code == 200
+    conv = r.json()
+    assert [m["role"] for m in conv["messages"]] == ["user", "assistant"]
+    assert conv["messages"][1]["evidence"][0]["evidence_id"] == "E1"
+
+
+def test_chat_stream_resumes_conversation_with_context(client, chat_env, monkeypatch):
+    first = _chat_events(client, {"q": "parser bounds fix?"})[-1]
+    cid = first["conversation_id"]
+
+    captured: list[str] = []
+    import crossmodalrag.service as svc
+
+    class _Recording(_ChatStub):
+        def generate_stream(self, prompt, system=None):
+            if not prompt.startswith("Title this conversation"):
+                captured.append(prompt)
+            yield from super().generate_stream(prompt, system=system)
+
+    monkeypatch.setattr(svc, "get_default_llm_provider", lambda: _Recording())
+    second = _chat_events(client, {"q": "parser again?", "conversation_id": cid})[-1]
+    assert second["conversation_id"] == cid  # appended, not a new conversation
+
+    from crossmodalrag.chat import HISTORY_HEADER
+
+    assert HISTORY_HEADER in captured[0]
+    assert "User: parser bounds fix?" in captured[0]
+
+    conv = client.get(f"/conversations/{cid}").json()
+    assert conv["message_count"] == 4
+
+
+def test_chat_stream_unknown_conversation_404(client, chat_env):
+    r = client.post("/chat/stream", json={"q": "hi", "conversation_id": 424242})
+    assert r.status_code == 404
+
+
+def test_chat_stream_missing_query_400(client, chat_env):
+    r = client.post("/chat/stream", json={})
+    assert r.status_code == 400
+
+
+def test_chat_stream_save_false_persists_nothing(client, chat_env):
+    final = _chat_events(client, {"q": "parser bounds fix?", "save": False})[-1]
+    assert final["conversation_id"] is None
+    assert final["data"]["answer"] == "Grounded answer [E1]."
+    assert client.get("/conversations").json()["total"] == 0
+
+
+def test_conversation_endpoint_matches_cli_history_json(client, chat_env, monkeypatch, capsys):
+    cid = _chat_events(client, {"q": "parser bounds fix?"})[-1]["conversation_id"]
+    monkeypatch.setattr(cli, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv", ["mem", "history", "--show", str(cid), "--json"])
+    cli.main()
+    cli_payload = json.loads(capsys.readouterr().out)
+    api_payload = client.get(f"/conversations/{cid}").json()
+    assert api_payload == cli_payload  # thin-client guarantee: one contract, two surfaces
