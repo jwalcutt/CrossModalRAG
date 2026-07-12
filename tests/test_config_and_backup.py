@@ -199,3 +199,25 @@ def test_chat_context_turns_negative_clamps_to_zero(monkeypatch):
 
     monkeypatch.setenv("CMRAG_CHAT_CONTEXT_TURNS", "-2")
     assert get_chat_context_turns() == 0
+
+
+def test_save_history_enabled_default_on(monkeypatch):
+    from crossmodalrag.config import save_history_enabled
+
+    monkeypatch.delenv("CMRAG_SAVE_HISTORY", raising=False)
+    assert save_history_enabled() is True
+
+
+@pytest.mark.parametrize("raw", ["off", "0", "false", "no", " OFF "])
+def test_save_history_disabled_values(monkeypatch, raw):
+    from crossmodalrag.config import save_history_enabled
+
+    monkeypatch.setenv("CMRAG_SAVE_HISTORY", raw)
+    assert save_history_enabled() is False
+
+
+def test_save_history_other_values_stay_on(monkeypatch):
+    from crossmodalrag.config import save_history_enabled
+
+    monkeypatch.setenv("CMRAG_SAVE_HISTORY", "anything-else")
+    assert save_history_enabled() is True

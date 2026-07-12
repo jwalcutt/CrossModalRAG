@@ -170,34 +170,44 @@ def generated_answer_to_dict(gen: GeneratedAnswer, *, total_seconds: float | Non
         },
         "cited_evidence_ids": list(gen.cited_evidence_ids),
         "invalid_citations": list(gen.invalid_citations),
-        "evidence": [
-            {
-                "evidence_id": eid,
-                "cited": eid in gen.cited_evidence_ids,
-                "source_id": hit.source_id,
-                "chunk_id": hit.chunk_id,
-                "source_type": hit.source_type,
-                "source_uri": hit.source_uri,
-                "title": hit.title,
-                # Additive cross-modal provenance (step 4). Existing keys above are unchanged.
-                "modality": _modality_of(hit),
-                "locator": format_locator(hit.source_uri, _locator(hit)),
-                "page": _page_of(hit),
-                "ocr_confidence": _ocr_conf_of(hit),
-                "subquery": hit.subquery,
-                "scores": {
-                    "combined": hit.score,
-                    "vector": hit.vector_score,
-                    "lexical": hit.lexical_score,
-                    "recency": hit.recency_score,
-                    "usage": hit.usage_score,
-                    "title": hit.title_score,
-                },
-                "excerpt": _preview(hit.chunk_text),
-            }
-            for eid, hit in _ordered_evidence(gen)
-        ],
+        "evidence": evidence_payload(gen),
     }
+
+
+def evidence_payload(gen: GeneratedAnswer) -> list[dict]:
+    """The ask contract's ``evidence`` array elements, as a reusable helper.
+
+    Shared by ``generated_answer_to_dict`` and the chat-history snapshot
+    (``conversations``.``messages.evidence_json``) so the stored ledger can
+    never drift from the live contract shape.
+    """
+    return [
+        {
+            "evidence_id": eid,
+            "cited": eid in gen.cited_evidence_ids,
+            "source_id": hit.source_id,
+            "chunk_id": hit.chunk_id,
+            "source_type": hit.source_type,
+            "source_uri": hit.source_uri,
+            "title": hit.title,
+            # Additive cross-modal provenance (step 4). Existing keys above are unchanged.
+            "modality": _modality_of(hit),
+            "locator": format_locator(hit.source_uri, _locator(hit)),
+            "page": _page_of(hit),
+            "ocr_confidence": _ocr_conf_of(hit),
+            "subquery": hit.subquery,
+            "scores": {
+                "combined": hit.score,
+                "vector": hit.vector_score,
+                "lexical": hit.lexical_score,
+                "recency": hit.recency_score,
+                "usage": hit.usage_score,
+                "title": hit.title_score,
+            },
+            "excerpt": _preview(hit.chunk_text),
+        }
+        for eid, hit in _ordered_evidence(gen)
+    ]
 
 
 def template_answer_to_dict(

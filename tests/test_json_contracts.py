@@ -216,3 +216,59 @@ def test_cli_recall_json_offline(built_db, monkeypatch, capsys):
     payload = _run_json(monkeypatch, capsys, ["recall", "--level", "concept", "--json"])
     assert payload["level"] == "concept"
     assert payload["recall"] and payload["recall"][0]["generated_by"] == "fallback"
+
+
+# --- chat-history contracts (conversations/messages) ---------------------------------------
+
+
+def test_message_and_conversation_to_dict_keys(tmp_path):
+    import json as _json
+
+    from crossmodalrag.conversations.contract import conversation_to_dict, message_to_dict
+    from crossmodalrag.conversations.store import (
+        create_conversation,
+        get_conversation,
+        list_messages,
+        record_message,
+    )
+    from crossmodalrag.db import connect, init_db
+
+    conn = connect(tmp_path / "m.db")
+    init_db(conn)
+    cid = create_conversation(conn, started_at="2026-07-11T10:00:00+00:00", title="t")
+    record_message(conn, cid, turn_index=0, role="user", text="q")
+    record_message(
+        conn, cid, turn_index=0, role="assistant", text="a [E1]",
+        evidence_json=_json.dumps([{"evidence_id": "E1"}]), model="stub",
+    )
+    conn.commit()
+
+    msg = message_to_dict(list_messages(conn, cid)[1])
+    assert set(msg) == {
+        "id", "role", "turn_index", "text", "abstention_reason", "truncated",
+        "model", "created_at", "evidence",
+    }
+    conv = conversation_to_dict(conn, get_conversation(conn, cid))
+    assert set(conv) == {"id", "started_at", "updated_at", "title", "message_count", "messages"}
+    conv_no_msgs = conversation_to_dict(conn, get_conversation(conn, cid), include_messages=False)
+    assert set(conv_no_msgs) == {"id", "started_at", "updated_at", "title", "message_count"}
+    conn.close()
+
+
+def test_stored_evidence_shape_matches_ask_contract():
+    # The shared-helper guarantee: what the recorder snapshots is element-for-element
+    # the ask contract's evidence array.
+    from crossmodalrag.generate.answer import evidence_payload, generated_answer_to_dict
+    from crossmodalrag.generate.synthesize import GeneratedAnswer
+    from crossmodalrag.retrieve.lexical import RetrievalHit
+
+    hit = RetrievalHit(
+        chunk_id=1, source_id=1, source_type="note", source_uri="/abs/x.md",
+        source_timestamp="2026-06-01T00:00:00+00:00", title="x", chunk_index=0,
+        chunk_text="alpha", score=0.9, lexical_score=0.9, recency_score=0.5, vector_score=0.0,
+    )
+    gen = GeneratedAnswer(
+        query="q", answer_text="a [E1]", cited_evidence_ids=["E1"], invalid_citations=[],
+        evidence=[hit], abstained=False, model="stub", id_map={"E1": hit},
+    )
+    assert generated_answer_to_dict(gen)["evidence"] == evidence_payload(gen)

@@ -1,4 +1,4 @@
-"""Modality taxonomy + locator contract for cross-modal evidence (Phase 3).
+"""Modality taxonomy + locator contract for cross-modal evidence.
 
 This module is the single source of truth for how an ``evidence_chunks`` row
 declares *what kind of evidence it is* and *where in its source it came from*.

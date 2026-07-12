@@ -138,6 +138,17 @@ def usage_tracking_enabled() -> bool:
     return os.getenv("CMRAG_USAGE_TRACKING", "off").strip().lower() in {"on", "1", "true", "yes"}
 
 
+def save_history_enabled() -> bool:
+    """Whether interactive chat sessions persist to conversations/messages. ON by default.
+
+    Privacy: this stores raw query/answer text — LOCAL-ONLY, never sent anywhere. Disable
+    with CMRAG_SAVE_HISTORY=off (or per-session `--no-save`); wipe any time with
+    `mem history --clear`. One-shot `mem ask "<q>"` and eval/scripted paths never write
+    history regardless of this setting.
+    """
+    return os.getenv("CMRAG_SAVE_HISTORY", "on").strip().lower() not in {"off", "0", "false", "no"}
+
+
 def get_drift_window_days() -> float:
     """Window length (days) for concept-drift snapshots. Default 30."""
     raw = os.getenv("CMRAG_DRIFT_WINDOW_DAYS", "30").strip()

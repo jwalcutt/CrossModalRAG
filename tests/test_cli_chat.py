@@ -269,3 +269,86 @@ def test_no_track_records_nothing(db, monkeypatch):
     _feed_input(monkeypatch, ["parser q1", "parser q2"])
     _run(monkeypatch, ["chat", "--no-track"])
     assert calls == []
+
+
+# --- conversation persistence (step 12) ---------------------------------------------------
+
+
+def _history_rows(db_path):
+    from crossmodalrag.db import connect
+
+    conn = connect(db_path)
+    try:
+        convs = conn.execute("SELECT id, title FROM conversations ORDER BY id").fetchall()
+        msgs = conn.execute(
+            "SELECT conversation_id, role, text, abstention_reason FROM messages ORDER BY id"
+        ).fetchall()
+        return [tuple(c) for c in convs], [tuple(m) for m in msgs]
+    finally:
+        conn.close()
+
+
+def test_chat_session_persists_turns(db, monkeypatch):
+    provider = RecordingProvider()
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    _feed_input(monkeypatch, ["parser q1", "parser q2"])
+    _run(monkeypatch, ["chat"])
+    convs, msgs = _history_rows(db)
+    assert len(convs) == 1
+    assert convs[0][1] == "parser q1"  # title from first query
+    assert [(m[1], m[2]) for m in msgs] == [
+        ("user", "parser q1"),
+        ("assistant", "Grounded claim [E1]."),
+        ("user", "parser q2"),
+        ("assistant", "Grounded claim [E1]."),
+    ]
+
+
+def test_new_rotates_conversation_clear_does_not(db, monkeypatch):
+    provider = RecordingProvider()
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    _feed_input(monkeypatch, ["parser q1", "/clear", "parser q2", "/new", "parser q3"])
+    _run(monkeypatch, ["chat"])
+    convs, msgs = _history_rows(db)
+    assert len(convs) == 2  # /clear stayed in conversation 1; /new opened 2
+    by_conv = {}
+    for conversation_id, role, text, _reason in msgs:
+        if role == "user":
+            by_conv.setdefault(conversation_id, []).append(text)
+    assert sorted(by_conv.values()) == [["parser q1", "parser q2"], ["parser q3"]]
+
+
+def test_abstained_turn_is_persisted_with_reason(db, monkeypatch):
+    provider = RecordingProvider(output=INSUFFICIENT_EVIDENCE_TEXT)
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    _feed_input(monkeypatch, ["parser q1"])
+    _run(monkeypatch, ["chat"])
+    _convs, msgs = _history_rows(db)
+    assert [(m[1], m[3]) for m in msgs] == [("user", None), ("assistant", "llm_insufficient")]
+
+
+def test_no_save_flag_persists_nothing(db, monkeypatch):
+    provider = RecordingProvider()
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    _feed_input(monkeypatch, ["parser q1"])
+    _run(monkeypatch, ["chat", "--no-save"])
+    convs, msgs = _history_rows(db)
+    assert convs == [] and msgs == []
+
+
+def test_save_history_env_off_persists_nothing(db, monkeypatch):
+    monkeypatch.setenv("CMRAG_SAVE_HISTORY", "off")
+    provider = RecordingProvider()
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    _feed_input(monkeypatch, ["parser q1"])
+    _run(monkeypatch, ["chat"])
+    convs, msgs = _history_rows(db)
+    assert convs == [] and msgs == []
+
+
+def test_one_shot_ask_never_persists(db, monkeypatch):
+    provider = RecordingProvider()
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    _run(monkeypatch, ["ask", "parser q1"])
+    convs, msgs = _history_rows(db)
+    assert convs == [] and msgs == []

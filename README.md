@@ -211,6 +211,26 @@ Run `mem chat` (or `mem ask` with no query) to start an interactive chat session
   lexical-only retrieval (no embeddings extra) a purely referential follow-up ("expand on that")
   may retrieve nothing and abstain — semantic retrieval resolves this in practice.
 
+#### Chat history
+
+Interactive sessions are **saved locally by default** to the memory DB (`conversations` /
+`messages`) so past exchanges can be browsed later — including each answer's full evidence
+snapshot (so provenance drill-down survives re-chunking), abstentions with their reason, and
+truncation flags. History is private and local-only (never sent anywhere), **additive and
+separable** (never part of any ingestion/derivation fingerprint — dropping it changes nothing
+else), and entirely under your control:
+
+- `mem history` — list saved conversations (newest first, `--top N`, `--json`).
+- `mem history --show <id>` — replay one conversation chat-style with cited-evidence refs
+  (`--json` emits the full contract, evidence snapshots included).
+- `mem history --clear [--id <id>]` — wipe everything, or one conversation.
+- `--no-save` on `mem chat` / bare `mem ask`, or `CMRAG_SAVE_HISTORY=off`, disables saving.
+- In-session: `/new` starts a fresh saved conversation (and clears context); `/clear` only resets
+  the carried context and stays in the same conversation.
+
+Only interactive sessions are recorded — one-shot `mem ask "<query>"`, `--no-llm` template turns,
+and eval/scripted paths never write history.
+
 Requires [Ollama](https://ollama.com) running locally with a model pulled
 (`ollama pull gemma4`). Swap models anytime via `CMRAG_LLM_MODEL`.
 
@@ -598,6 +618,7 @@ export CMRAG_LLM_NUM_CTX=8192              # context window requested from Ollam
                                            # answers mid-generation (raise if warned; 0 = server default)
 export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval score
 export CMRAG_CHAT_CONTEXT_TURNS=8          # prior turns carried in `mem chat` (0 disables)
+export CMRAG_SAVE_HISTORY=on               # save chat sessions locally (off disables; `mem history --clear` wipes)
 export CMRAG_EXTRACT_MODEL=llama3.2        # model for `mem build-memory` event extraction
 export CMRAG_EPISODE_GAP_HOURS=24          # L2 episode session gap (deterministic, no LLM)
 export CMRAG_CONCEPT_SIM_THRESHOLD=0.80    # L3 concept clustering cosine threshold (embeddings extra)

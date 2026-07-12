@@ -14,6 +14,7 @@ from crossmodalrag.config import (
     get_default_top_k,
     get_extract_model,
     load_dotenv,
+    save_history_enabled,
     usage_tracking_enabled,
 )
 from crossmodalrag.db import connect, init_db
@@ -359,6 +360,7 @@ def chat_cmd(
     modalities: list[str] | None = None,
     track: bool | None = None,
     stream: bool = True,
+    save: bool = True,
 ) -> None:
     """Interactive multi-turn ask session (`mem chat`, or `mem ask` with no query).
 
@@ -366,11 +368,17 @@ def chat_cmd(
     independently and cites the CURRENT turn's evidence; prior answered turns
     are carried only as conversation context (`chat.render_history`, citations
     stripped). Abstained and template (`--no-llm` / LLM-unavailable) turns are
-    never carried. Exit with /exit, /quit, or Ctrl-D; /clear or /new resets the
-    context without leaving. Piped stdin works as a batch mode (one query per
-    line, no prompt/banner).
+    never carried. Exit with /exit, /quit, or Ctrl-D; /clear resets the context
+    without leaving; /new also starts a new saved conversation. Piped stdin
+    works as a batch mode (one query per line, no prompt/banner).
+
+    With ``save`` (default; `--no-save` / CMRAG_SAVE_HISTORY=off disables) each
+    LLM turn — including abstained ones — is persisted locally to the
+    conversations/messages history (browse with `mem history`, wipe with
+    `mem history --clear`). Template/no-LLM turns are not persisted.
     """
     from crossmodalrag.chat import ChatSession, render_history
+    from crossmodalrag.conversations.recorder import SessionRecorder
 
     try:  # line editing/arrow keys when available; purely optional
         import readline  # noqa: F401
@@ -380,9 +388,15 @@ def chat_cmd(
     # Usage tracking mirrors ask_cmd (no --accept in a session).
     track_enabled = False if track is False else (bool(track) or usage_tracking_enabled())
     session = ChatSession()
+    recorder = SessionRecorder(get_db_path(), enabled=save)
     interactive = sys.stdin.isatty()
     if interactive:
         print("Interactive session — /exit (or Ctrl-D) to quit, /clear to reset context.")
+        if save:
+            print(
+                "History is saved locally (/new starts a fresh conversation; "
+                "`mem history --clear` wipes; --no-save disables)."
+            )
     try:
         while True:
             try:
@@ -396,7 +410,11 @@ def chat_cmd(
                 break
             if text in {"/clear", "/new"}:
                 session.clear()
-                print("[context cleared]")
+                if text == "/new":
+                    recorder.new_conversation()
+                    print("[new conversation]")
+                else:
+                    print("[context cleared]")
                 continue
             gen = _run_ask_turn(
                 text,
@@ -413,6 +431,7 @@ def chat_cmd(
             )
             if gen is not None:
                 session.add_turn(text, gen.answer_text, abstained=gen.abstained)
+                recorder.record_turn(text, gen)
             print()
     except KeyboardInterrupt:
         # Clean session exit whether at the prompt or mid-stream; close any
@@ -421,6 +440,98 @@ def chat_cmd(
         sys.stdout.flush()
     if interactive:
         print("bye")
+
+
+def history_cmd(
+    show_id: int | None = None,
+    top: int = 10,
+    clear: bool = False,
+    clear_id: int | None = None,
+    as_json: bool = False,
+) -> None:
+    """List/show/clear locally saved chat conversations (`mem history`)."""
+    from crossmodalrag.conversations.contract import conversation_to_dict
+    from crossmodalrag.conversations.store import (
+        clear_conversations,
+        count_messages,
+        get_conversation,
+        list_conversations,
+        list_messages,
+    )
+
+    if clear and show_id is not None:
+        raise CLIError("--clear and --show cannot be combined.")
+
+    db_path = get_db_path()
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+
+        if clear:
+            deleted = clear_conversations(conn, conversation_id=clear_id)
+            if as_json:
+                print(json.dumps({"cleared": deleted}, indent=2))
+            else:
+                scope = f"conversation #{clear_id}" if clear_id is not None else "all conversations"
+                print(f"Cleared {deleted} conversation(s) ({scope}) from {db_path}.")
+            return
+
+        if show_id is not None:
+            conversation = get_conversation(conn, show_id)
+            if conversation is None:
+                raise CLIError(f"No saved conversation with id {show_id}.")
+            if as_json:
+                print(json.dumps(conversation_to_dict(conn, conversation), indent=2))
+                return
+            print(f'Conversation #{conversation.id}: "{conversation.title or "untitled"}"')
+            print(f"{conversation.started_at} → {conversation.updated_at}")
+            for message in list_messages(conn, show_id):
+                print()
+                if message.role == "user":
+                    print(f"you> {message.text}")
+                    continue
+                header = message.model or "assistant"
+                marks = []
+                if message.abstention_reason:
+                    marks.append(f"abstained: {message.abstention_reason}")
+                if message.truncated:
+                    marks.append("truncated")
+                suffix = f" [{'; '.join(marks)}]" if marks else ""
+                print(f"{header}>{suffix} {message.text}")
+                if message.evidence_json:
+                    cited = [
+                        ev for ev in json.loads(message.evidence_json) if ev.get("cited")
+                    ]
+                    for ev in cited:
+                        print(f"      [{ev['evidence_id']}] {ev.get('locator') or ev['source_uri']}")
+            return
+
+        conversations = list_conversations(conn, top=top)
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "save_enabled": save_history_enabled(),
+                        "total": len(list_conversations(conn)),
+                        "conversations": [
+                            conversation_to_dict(conn, c, include_messages=False)
+                            for c in conversations
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+            return
+        if not conversations:
+            print("No saved conversations. Start one with `mem chat`.")
+            return
+        print(f"Saved conversations (newest first, top {top}):")
+        for c in conversations:
+            n = count_messages(conn, c.id)
+            print(f"  #{c.id}  {c.updated_at}  ({n} messages)  {c.title or 'untitled'}")
+        print('Show one with `mem history --show <id>`; wipe with `mem history --clear`.')
+    finally:
+        conn.close()
 
 
 def eval_cmd(
@@ -1390,6 +1501,12 @@ def build_parser() -> argparse.ArgumentParser:
             help="Print the answer only once generation finishes instead of streaming tokens "
             "live (streaming applies to interactive terminals only; --json is always buffered).",
         )
+        p.add_argument(
+            "--no-save",
+            action="store_true",
+            help="Don't persist this session to local chat history (interactive sessions only; "
+            "overrides CMRAG_SAVE_HISTORY; one-shot queries are never saved).",
+        )
 
     p_ask = sub.add_parser("ask", help="Query indexed evidence.")
     p_ask.add_argument(
@@ -1407,6 +1524,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Interactive multi-turn ask session (same as `mem ask` with no query).",
     )
     _add_ask_options(p_chat, oneshot_only=False)
+
+    p_history = sub.add_parser(
+        "history",
+        help="List/show saved chat conversations (local), or --clear to wipe history.",
+    )
+    p_history.add_argument("--show", type=int, metavar="ID", help="Show one conversation in full.")
+    p_history.add_argument("--top", type=int, default=10, help="How many conversations to list.")
+    p_history.add_argument(
+        "--clear", action="store_true", help="Delete saved conversations (local, no confirmation)."
+    )
+    p_history.add_argument(
+        "--id", type=int, default=None, dest="clear_id",
+        help="With --clear: delete only this conversation.",
+    )
+    p_history.add_argument("--json", dest="as_json", action="store_true")
 
     p_eval = sub.add_parser(
         "eval",
@@ -1758,6 +1890,7 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None
                 modalities=args.modality,
                 track=track,
                 stream=not args.no_stream,
+                save=False if args.no_save else save_history_enabled(),
             )
             return
         ask_cmd(
@@ -1773,6 +1906,15 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None
             accept=args.accept,
             track=track,
             stream=not args.no_stream,
+        )
+        return
+    if args.command == "history":
+        history_cmd(
+            show_id=args.show,
+            top=args.top,
+            clear=args.clear,
+            clear_id=args.clear_id,
+            as_json=args.as_json,
         )
         return
     if args.command == "eval":

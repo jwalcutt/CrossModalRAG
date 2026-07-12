@@ -182,6 +182,44 @@ CREATE TABLE IF NOT EXISTS drift_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_drift_snapshots_concept ON drift_snapshots(concept_id);
 CREATE INDEX IF NOT EXISTS idx_drift_snapshots_fingerprint ON drift_snapshots(derivation_fingerprint);
+
+-- interactive chat history (conversations + their messages). ADDITIVE and SEPARABLE
+-- (the usage_events precedent): never part of any content/derivation fingerprint and
+-- never read by retrieval/derivation, so dropping both tables restores prior behavior
+-- byte-identical. PRIVATE: stores raw query/answer text — local-only, opt-out
+-- (CMRAG_SAVE_HISTORY / --no-save), clearable (`mem history --clear`). ``evidence_json``
+-- is a point-in-time snapshot of the answer's full evidence ledger (same element shape
+-- as the ask contract's ``evidence`` array, via generate.answer.evidence_payload);
+-- chunk ids are re-issued on re-chunk, so the snapshot — never a live join — is the
+-- source of truth for rendering history, and stored chunk_id/source_uri are best-effort
+-- deep links only. ``started_at``/``updated_at`` are app-supplied UTC ISO (injectable,
+-- the usage_events event_at precedent); ``created_at`` is audit only.
+CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    title TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL,
+    turn_index INTEGER NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    text TEXT NOT NULL,
+    evidence_json TEXT,
+    abstention_reason TEXT,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    model TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(conversation_id) REFERENCES conversations(id),
+    UNIQUE(conversation_id, turn_index, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
 """
 
 
