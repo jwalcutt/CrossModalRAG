@@ -79,6 +79,12 @@ def _run(monkeypatch, argv: list[str]) -> None:
     cli.main()
 
 
+def _turn_prompts(provider: "RecordingProvider") -> list[str]:
+    """The per-turn synthesis prompts, excluding the recorder's conversation-title
+    prompts (a new conversation is auto-titled by an extra LLM call)."""
+    return [p for p in provider.prompts if not p.startswith("Title this conversation")]
+
+
 def _history_block(prompt: str) -> str:
     """The part of a turn prompt before the current turn's evidence."""
     return prompt.split("Evidence:")[0]
@@ -92,9 +98,10 @@ def test_second_turn_prompt_carries_first_turn(db, monkeypatch):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["what changed in the parser?", "expand on the parser fix"])
     _run(monkeypatch, ["chat"])
-    assert len(provider.prompts) == 2
-    assert HISTORY_HEADER not in provider.prompts[0]
-    block = _history_block(provider.prompts[1])
+    prompts = _turn_prompts(provider)
+    assert len(prompts) == 2
+    assert HISTORY_HEADER not in prompts[0]
+    block = _history_block(prompts[1])
     assert HISTORY_HEADER in block
     assert "User: what changed in the parser?" in block
     assert "Grounded claim" in block
@@ -105,7 +112,7 @@ def test_stale_citations_stripped_from_history(db, monkeypatch):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["parser first question", "parser second question"])
     _run(monkeypatch, ["chat"])
-    block = _history_block(provider.prompts[1])
+    block = _history_block(_turn_prompts(provider)[1])
     assert "Claim" in block
     # Stale evidence ids never reach the next prompt (the header's literal
     # "[E#]" is instructional text, not a citation id).
@@ -118,7 +125,7 @@ def test_bare_ask_enters_the_same_session(db, monkeypatch):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["parser q1", "parser q2"])
     _run(monkeypatch, ["ask"])
-    assert HISTORY_HEADER in provider.prompts[1]
+    assert HISTORY_HEADER in _turn_prompts(provider)[1]
 
 
 # --- session commands ------------------------------------------------------------------
@@ -129,7 +136,7 @@ def test_clear_resets_context(db, monkeypatch, capsys):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["parser q1", "/clear", "parser q2"])
     _run(monkeypatch, ["chat"])
-    assert HISTORY_HEADER not in provider.prompts[1]
+    assert HISTORY_HEADER not in _turn_prompts(provider)[1]
     assert "[context cleared]" in capsys.readouterr().out
 
 
@@ -138,7 +145,7 @@ def test_new_alias_resets_context(db, monkeypatch):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["parser q1", "/new", "parser q2"])
     _run(monkeypatch, ["chat"])
-    assert HISTORY_HEADER not in provider.prompts[1]
+    assert HISTORY_HEADER not in _turn_prompts(provider)[1]
 
 
 def test_exit_stops_before_later_lines(db, monkeypatch):
@@ -146,7 +153,7 @@ def test_exit_stops_before_later_lines(db, monkeypatch):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["parser q1", "/exit", "never asked"])
     _run(monkeypatch, ["chat"])
-    assert len(provider.prompts) == 1
+    assert len(_turn_prompts(provider)) == 1
 
 
 def test_blank_lines_ignored(db, monkeypatch):
@@ -154,7 +161,7 @@ def test_blank_lines_ignored(db, monkeypatch):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["", "   ", "parser q1"])
     _run(monkeypatch, ["chat"])
-    assert len(provider.prompts) == 1
+    assert len(_turn_prompts(provider)) == 1
 
 
 def test_eof_and_keyboard_interrupt_exit_cleanly(db, monkeypatch):
@@ -180,6 +187,8 @@ def test_abstained_turn_not_carried_into_history(db, monkeypatch):
     outputs = iter([INSUFFICIENT_EVIDENCE_TEXT, "Grounded claim [E1]."])
 
     def gen(prompt: str, system: str | None = None) -> str:
+        if prompt.startswith("Title this conversation"):
+            return "Stub Title"  # the recorder's naming call; not a turn
         provider.prompts.append(prompt)
         return next(outputs)
 
@@ -190,7 +199,7 @@ def test_abstained_turn_not_carried_into_history(db, monkeypatch):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["parser unanswerable?", "parser answerable?"])
     _run(monkeypatch, ["chat"])
-    assert HISTORY_HEADER not in provider.prompts[1]
+    assert HISTORY_HEADER not in _turn_prompts(provider)[1]
 
 
 def test_weak_retrieval_gate_fires_per_turn(db, monkeypatch, capsys):
@@ -199,7 +208,7 @@ def test_weak_retrieval_gate_fires_per_turn(db, monkeypatch, capsys):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["q1", "q2"])
     _run(monkeypatch, ["chat"])
-    assert provider.prompts == []  # gate short-circuits before the LLM every turn
+    assert _turn_prompts(provider) == []  # gate short-circuits before the LLM every turn
     out = capsys.readouterr().out
     assert out.count(INSUFFICIENT_EVIDENCE_TEXT) == 2
     # And nothing was carried: both turns abstained.
@@ -211,7 +220,7 @@ def test_context_cap_evicts_oldest_end_to_end(db, monkeypatch):
     monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
     _feed_input(monkeypatch, ["parser q-one", "parser q-two", "parser q-three"])
     _run(monkeypatch, ["chat"])
-    block = _history_block(provider.prompts[2])
+    block = _history_block(_turn_prompts(provider)[2])
     assert "User: parser q-two" in block
     assert "q-one" not in block
 
@@ -295,7 +304,7 @@ def test_chat_session_persists_turns(db, monkeypatch):
     _run(monkeypatch, ["chat"])
     convs, msgs = _history_rows(db)
     assert len(convs) == 1
-    assert convs[0][1] == "parser q1"  # title from first query
+    assert convs[0][1] == "Grounded claim [E1]"  # LLM-generated (stub output, sanitized)
     assert [(m[1], m[2]) for m in msgs] == [
         ("user", "parser q1"),
         ("assistant", "Grounded claim [E1]."),
@@ -352,3 +361,83 @@ def test_one_shot_ask_never_persists(db, monkeypatch):
     _run(monkeypatch, ["ask", "parser q1"])
     convs, msgs = _history_rows(db)
     assert convs == [] and msgs == []
+
+
+# --- resume (--resume) ---------------------------------------------------------------------
+
+
+def test_resume_loads_context_and_appends_to_same_conversation(db, monkeypatch, capsys):
+    provider = RecordingProvider()
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    # Session 1: two turns.
+    _feed_input(monkeypatch, ["parser q1", "parser q2"])
+    _run(monkeypatch, ["chat"])
+    convs, _msgs = _history_rows(db)
+    assert len(convs) == 1
+    cid = convs[0][0]
+    capsys.readouterr()
+
+    # Session 2: resume by id; the first prompt must carry session 1's turns.
+    provider.prompts.clear()
+    _feed_input(monkeypatch, ["parser q3"])
+    _run(monkeypatch, ["chat", "--resume", str(cid)])
+    out = capsys.readouterr().out
+    assert f"Resuming conversation #{cid}" in out
+    first_prompt = _turn_prompts(provider)[0]
+    assert HISTORY_HEADER in first_prompt
+    assert "User: parser q1" in first_prompt
+    assert "User: parser q2" in first_prompt
+
+    convs, msgs = _history_rows(db)
+    assert len(convs) == 1  # appended, not a new conversation
+    user_texts = [m[2] for m in msgs if m[1] == "user"]
+    assert user_texts == ["parser q1", "parser q2", "parser q3"]
+
+
+def test_bare_resume_picks_most_recent(db, monkeypatch, capsys):
+    provider = RecordingProvider()
+    monkeypatch.setattr(cli, "get_default_llm_provider", lambda: provider)
+    _feed_input(monkeypatch, ["parser q1", "/new", "parser q2"])
+    _run(monkeypatch, ["chat"])
+    capsys.readouterr()
+
+    provider.prompts.clear()
+    _feed_input(monkeypatch, ["parser q3"])
+    _run(monkeypatch, ["chat", "--resume"])
+    first_prompt = _turn_prompts(provider)[0]
+    assert "User: parser q2" in first_prompt  # the second (most recent) conversation
+    assert "parser q1" not in first_prompt
+
+    convs, msgs = _history_rows(db)
+    assert len(convs) == 2  # still two conversations; q3 joined the second
+    by_conv: dict = {}
+    for conversation_id, role, text, _reason in msgs:
+        if role == "user":
+            by_conv.setdefault(conversation_id, []).append(text)
+    assert sorted(by_conv.values()) == [["parser q1"], ["parser q2", "parser q3"]]
+
+
+def test_resume_unknown_id_errors(db, monkeypatch, capsys):
+    _feed_input(monkeypatch, [])
+    monkeypatch.setattr(sys, "argv", ["mem", "chat", "--resume", "424242"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "error:" in capsys.readouterr().err
+
+
+def test_bare_resume_with_no_history_errors(db, monkeypatch, capsys):
+    _feed_input(monkeypatch, [])
+    monkeypatch.setattr(sys, "argv", ["mem", "chat", "--resume"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "No saved conversations" in capsys.readouterr().err
+
+
+def test_resume_with_one_shot_query_errors(db, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["mem", "ask", "some question", "--resume", "1"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "interactive session" in capsys.readouterr().err

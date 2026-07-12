@@ -38,6 +38,11 @@ class SessionRecorder:
       are not persisted.
     - Disabled (``enabled=False``, from ``--no-save`` / ``CMRAG_SAVE_HISTORY``)
       it is inert.
+    - ``title_fn`` (optional) names a NEW conversation from its first exchange
+      (e.g. an LLM title, ``naming.generate_conversation_title``); ``None`` or
+      any failure falls back to the deterministic first-query title.
+    - ``attach()`` continues an EXISTING conversation (resume): new turns append
+      after its last turn_index and the title is left untouched.
     """
 
     def __init__(
@@ -46,12 +51,29 @@ class SessionRecorder:
         *,
         enabled: bool,
         now_fn: Callable[[], str] = _utc_now_iso,
+        title_fn: Callable[[str, str], str | None] | None = None,
     ) -> None:
         self.db_path = db_path
         self.enabled = enabled
         self._now_fn = now_fn
+        self._title_fn = title_fn
         self.conversation_id: int | None = None
         self._turn_index = 0
+
+    def attach(self, conversation_id: int, *, next_turn_index: int) -> None:
+        """Continue an existing conversation; subsequent turns append to it."""
+        self.conversation_id = conversation_id
+        self._turn_index = next_turn_index
+
+    def _derive_conversation_title(self, query: str, gen: GeneratedAnswer) -> str:
+        if self._title_fn is not None:
+            try:
+                generated = self._title_fn(query, gen.answer_text)
+            except Exception:  # any naming failure falls back deterministically
+                generated = None
+            if generated:
+                return generated
+        return derive_title(query)
 
     def record_turn(self, query: str, gen: GeneratedAnswer) -> None:
         if not self.enabled:
@@ -63,7 +85,7 @@ class SessionRecorder:
                 init_db(conn)
                 if self.conversation_id is None:
                     self.conversation_id = create_conversation(
-                        conn, started_at=now, title=derive_title(query)
+                        conn, started_at=now, title=self._derive_conversation_title(query, gen)
                     )
                 record_message(
                     conn,

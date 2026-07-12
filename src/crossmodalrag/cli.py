@@ -361,6 +361,7 @@ def chat_cmd(
     track: bool | None = None,
     stream: bool = True,
     save: bool = True,
+    resume: int | None = None,
 ) -> None:
     """Interactive multi-turn ask session (`mem chat`, or `mem ask` with no query).
 
@@ -375,10 +376,19 @@ def chat_cmd(
     With ``save`` (default; `--no-save` / CMRAG_SAVE_HISTORY=off disables) each
     LLM turn — including abstained ones — is persisted locally to the
     conversations/messages history (browse with `mem history`, wipe with
-    `mem history --clear`). Template/no-LLM turns are not persisted.
+    `mem history --clear`). Template/no-LLM turns are not persisted. New
+    conversations are auto-titled by the local LLM from their first exchange
+    (deterministic first-query fallback when the LLM is unavailable).
+
+    ``resume`` continues a stored conversation: its answered turns are loaded
+    as carried context (context cap + abstained-skip rules apply) and new turns
+    append to the same conversation (0 = the most recent conversation).
     """
     from crossmodalrag.chat import ChatSession, render_history
+    from crossmodalrag.conversations.naming import generate_conversation_title
     from crossmodalrag.conversations.recorder import SessionRecorder
+    from crossmodalrag.conversations.resume import next_turn_index, turns_from_messages
+    from crossmodalrag.conversations.store import get_conversation, list_conversations, list_messages
 
     try:  # line editing/arrow keys when available; purely optional
         import readline  # noqa: F401
@@ -388,8 +398,42 @@ def chat_cmd(
     # Usage tracking mirrors ask_cmd (no --accept in a session).
     track_enabled = False if track is False else (bool(track) or usage_tracking_enabled())
     session = ChatSession()
-    recorder = SessionRecorder(get_db_path(), enabled=save)
+
+    def _title_fn(query: str, answer_text: str) -> str | None:
+        provider = get_default_llm_provider() if use_llm else None
+        if provider is None:
+            return None
+        return generate_conversation_title(provider, query=query, answer_text=answer_text)
+
+    recorder = SessionRecorder(get_db_path(), enabled=save, title_fn=_title_fn)
     interactive = sys.stdin.isatty()
+
+    if resume is not None:
+        conn = connect(get_db_path())
+        try:
+            init_db(conn)
+            if resume == 0:  # bare --resume: the most recent conversation
+                recent = list_conversations(conn, top=1)
+                if not recent:
+                    raise CLIError("No saved conversations to resume. Start one with `mem chat`.")
+                conversation = recent[0]
+            else:
+                conversation = get_conversation(conn, resume)
+                if conversation is None:
+                    raise CLIError(f"No saved conversation with id {resume}.")
+            messages = list_messages(conn, conversation.id)
+        finally:
+            conn.close()
+        for turn in turns_from_messages(messages):
+            session.add_turn(turn.query, turn.answer_text)  # context cap applies
+        recorder.attach(conversation.id, next_turn_index=next_turn_index(messages))
+        print(
+            f'Resuming conversation #{conversation.id}: "{conversation.title or "untitled"}" '
+            f"({len(messages)} messages; {len(session.turns)} turns carried as context)"
+        )
+        for turn in session.turns:
+            print(f"  you> {turn.query}")
+
     if interactive:
         print("Interactive session — /exit (or Ctrl-D) to quit, /clear to reset context.")
         if save:
@@ -1507,6 +1551,16 @@ def build_parser() -> argparse.ArgumentParser:
             help="Don't persist this session to local chat history (interactive sessions only; "
             "overrides CMRAG_SAVE_HISTORY; one-shot queries are never saved).",
         )
+        p.add_argument(
+            "--resume",
+            type=int,
+            nargs="?",
+            const=0,
+            default=None,
+            metavar="ID",
+            help="Resume a saved conversation in an interactive session: load its turns as "
+            "context and append new turns to it. Omit ID to resume the most recent one.",
+        )
 
     p_ask = sub.add_parser("ask", help="Query indexed evidence.")
     p_ask.add_argument(
@@ -1891,8 +1945,11 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None
                 track=track,
                 stream=not args.no_stream,
                 save=False if args.no_save else save_history_enabled(),
+                resume=args.resume,
             )
             return
+        if getattr(args, "resume", None) is not None:
+            raise CLIError("--resume starts an interactive session; omit the query to use it.")
         ask_cmd(
             query,
             top_k=args.top_k,

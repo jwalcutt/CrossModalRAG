@@ -216,10 +216,15 @@ Run `mem chat` (or `mem ask` with no query) to start an interactive chat session
 Interactive sessions are **saved locally by default** to the memory DB (`conversations` /
 `messages`) so past exchanges can be browsed later — including each answer's full evidence
 snapshot (so provenance drill-down survives re-chunking), abstentions with their reason, and
-truncation flags. History is private and local-only (never sent anywhere), **additive and
-separable** (never part of any ingestion/derivation fingerprint — dropping it changes nothing
-else), and entirely under your control:
+truncation flags. New conversations are **auto-titled by the local LLM** from their first
+exchange (a short, few-word name; falls back to the first question when Ollama is offline).
+History is private and local-only (never sent anywhere), **additive and separable** (never part
+of any ingestion/derivation fingerprint — dropping it changes nothing else), and entirely under
+your control:
 
+- `mem chat --resume [<id>]` — **resume a saved conversation**: its answered turns load as
+  carried context (the context cap and abstained-skip rules apply) and new turns append to the
+  same conversation. Omit the id to resume the most recent one.
 - `mem history` — list saved conversations (newest first, `--top N`, `--json`).
 - `mem history --show <id>` — replay one conversation chat-style with cited-evidence refs
   (`--json` emits the full contract, evidence snapshots included).
