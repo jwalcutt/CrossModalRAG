@@ -282,9 +282,22 @@ export function AskView({ health }: ViewProps) {
                 <div className="answer-prose text-pretty">
                   <AnswerMarkdown text={result.answer} onCite={jumpToEvidence} />
                 </div>
+              ) : result.truncated ? (
+                <div className="abstain">
+                  <b>Answer cut off</b>
+                  The model's context window filled before any answer text was produced.
+                  Try a narrower question, or raise <code>CMRAG_LLM_NUM_CTX</code>.
+                </div>
               ) : (
                 <p className="muted">
                   No synthesized answer — browse the retrieved evidence ledger.
+                </p>
+              )}
+              {result.truncated && result.answer && !result.abstained && (
+                <p className="truncation-note" role="status">
+                  ⚠ This answer was cut off mid-generation (context window filled) — it is
+                  incomplete, not final. Try a narrower question, or raise{" "}
+                  <code>CMRAG_LLM_NUM_CTX</code>.
                 </p>
               )}
             </section>

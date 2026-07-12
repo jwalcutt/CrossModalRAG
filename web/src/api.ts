@@ -20,6 +20,9 @@ export interface AnswerPayload {
   query: string;
   model: string | null;
   abstained: boolean;
+  /** Generation stopped because the model's context window filled — the answer
+   * is cut off (possibly empty), not complete. */
+  truncated?: boolean;
   answer: string | null;
   cited_evidence_ids?: string[];
   invalid_citations?: string[];

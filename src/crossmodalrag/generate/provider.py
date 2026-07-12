@@ -10,6 +10,7 @@ from crossmodalrag.config import (
     get_llm_base_url,
     get_llm_keep_alive,
     get_llm_model,
+    get_llm_num_ctx,
     get_llm_provider_name,
     get_llm_timeout,
 )
@@ -48,11 +49,18 @@ class OllamaProvider:
         base_url: str | None = None,
         timeout: float | None = None,
         keep_alive: float | str | None = None,
+        num_ctx: int | None = None,
     ) -> None:
         self.name = model or get_llm_model()
         self.base_url = (base_url or get_llm_base_url()).rstrip("/")
         self.timeout = timeout if timeout is not None else get_llm_timeout()
         self.keep_alive = keep_alive if keep_alive is not None else get_llm_keep_alive()
+        self.num_ctx = num_ctx if num_ctx is not None else get_llm_num_ctx()
+        # "done_reason" of the most recent completed generation ("stop",
+        # "length", ...). "length" means the context window filled mid-answer —
+        # the output is truncated (or empty), not a model refusal. Callers use
+        # this to surface truncation instead of failing silently.
+        self.last_done_reason: str | None = None
 
     def generate(self, prompt: str, system: str | None = None) -> str:
         return "".join(self.generate_stream(prompt, system=system)).strip()
@@ -64,6 +72,14 @@ class OllamaProvider:
         (``{"response": "...", "done": false}`` ... ``{"done": true}``), so
         fragments can be yielded as lines arrive — still stdlib urllib only.
         """
+        options: dict[str, object] = {"temperature": 0}
+        # Ollama's server-side default context window (4096) silently truncates
+        # the prompt head — destroying the system prompt — and stops generation
+        # when the window fills, producing empty or mid-sentence-cut answers on
+        # evidence-heavy prompts. Send our own window explicitly (0 = defer to
+        # the server default).
+        if self.num_ctx > 0:
+            options["num_ctx"] = self.num_ctx
         payload: dict[str, object] = {
             "model": self.name,
             "prompt": prompt,
@@ -71,7 +87,7 @@ class OllamaProvider:
             # Keep the model resident between calls: cold-loading it dominated
             # tail latency (30 s vs 18 min for near-identical prompts).
             "keep_alive": self.keep_alive,
-            "options": {"temperature": 0},
+            "options": options,
         }
         if system:
             payload["system"] = system
@@ -82,6 +98,7 @@ class OllamaProvider:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        self.last_done_reason = None
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 for raw_line in response:
@@ -100,6 +117,8 @@ class OllamaProvider:
                     if fragment:
                         yield str(fragment)
                     if data.get("done"):
+                        reason = data.get("done_reason")
+                        self.last_done_reason = str(reason) if reason else None
                         return
         except (urllib.error.URLError, OSError) as exc:
             raise LLMUnavailable(

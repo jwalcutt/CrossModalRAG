@@ -64,6 +64,21 @@ def get_llm_keep_alive() -> float | str:
         return raw
 
 
+def get_llm_num_ctx() -> int:
+    """Context window (tokens) requested from Ollama for every LLM call. Default 8192.
+
+    Ollama's own server default (4096) is too small for evidence-heavy synthesis
+    prompts: it silently truncates the prompt head (destroying the system prompt)
+    and stops generation when the window fills, yielding empty or mid-sentence-cut
+    answers. 0 defers to the server default (not recommended).
+    """
+    raw = os.getenv("CMRAG_LLM_NUM_CTX", "8192").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 8192
+
+
 def get_extract_model() -> str:
     return os.getenv("CMRAG_EXTRACT_MODEL", "llama3.2").strip() or "llama3.2"
 

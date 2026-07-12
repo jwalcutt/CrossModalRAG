@@ -80,6 +80,11 @@ class GeneratedAnswer:
     generation_seconds: float = 0.0
     # None when answered; ABSTAIN_WEAK_RETRIEVAL / ABSTAIN_LLM_INSUFFICIENT when abstained.
     abstention_reason: str | None = None
+    # True when generation stopped because the model's context window filled
+    # (Ollama done_reason == "length"): the answer text is cut off — possibly
+    # empty — rather than complete. Surfaced so callers can say so instead of
+    # presenting a truncated answer as finished.
+    truncated: bool = False
 
 
 def build_evidence_prompt(
@@ -170,6 +175,10 @@ def _finalize_answer(
     valid = [eid for eid in cited if eid in id_map]
     invalid = [eid for eid in cited if eid not in id_map]
     abstained = raw_output.strip() == INSUFFICIENT_EVIDENCE_TEXT
+    # Providers that report a completion reason (OllamaProvider) let us tell a
+    # window-truncated answer from a complete one; stubs without the attribute
+    # default to not-truncated.
+    truncated = getattr(provider, "last_done_reason", None) == "length"
 
     return GeneratedAnswer(
         query=query,
@@ -184,6 +193,7 @@ def _finalize_answer(
         id_map=id_map,
         generation_seconds=generation_seconds,
         abstention_reason=ABSTAIN_LLM_INSUFFICIENT if abstained else None,
+        truncated=truncated,
     )
 
 

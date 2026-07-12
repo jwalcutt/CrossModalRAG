@@ -179,6 +179,10 @@ rather than refusing outright. Every abstention carries a reason — `weak_retri
 short-circuited before the LLM) or `llm_insufficient` (the model judged the evidence irrelevant) —
 shown in the status line alongside the top retrieval score, and as `abstention_reason` in `--json`.
 If Ollama is unreachable it automatically falls back to the deterministic evidence template.
+If generation ever stops because the model's context window filled, the answer is flagged as
+**truncated** — a visible warning in the CLI and web console, and an additive `truncated` key in
+the `--json`/API contract — rather than being presented as complete (raise `CMRAG_LLM_NUM_CTX`,
+lower `--top-k`, or narrow the question).
 
 In an interactive terminal the answer streams token-by-token as it is generated, with the
 citations/evidence footer rendered once generation completes (citation validation and abstention
@@ -589,6 +593,9 @@ export CMRAG_LLM_TIMEOUT=120
 export CMRAG_LLM_KEEP_ALIVE=30m            # keep the model loaded between calls ("30m", "1h",
                                            # seconds, or -1 = until Ollama exits); cold-loads
                                            # dominate tail latency
+export CMRAG_LLM_NUM_CTX=8192              # context window requested from Ollama; its 4096
+                                           # default truncates evidence-heavy prompts and cuts
+                                           # answers mid-generation (raise if warned; 0 = server default)
 export CMRAG_MIN_EVIDENCE_SCORE=0.15       # abstain below this top retrieval score
 export CMRAG_CHAT_CONTEXT_TURNS=8          # prior turns carried in `mem chat` (0 disables)
 export CMRAG_EXTRACT_MODEL=llama3.2        # model for `mem build-memory` event extraction

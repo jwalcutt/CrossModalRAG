@@ -145,3 +145,101 @@ def test_timing_is_additive_existing_keys_unchanged() -> None:
         "evidence",
     ):
         assert key in data
+
+
+# --- num_ctx (context window) lands in the Ollama request payload --------------------------
+# Ollama's server default (4096) truncated evidence-heavy prompts (destroying the
+# system prompt) and cut generation mid-answer (done_reason=length) — the
+# empty/truncated-answer bug.
+
+
+def test_ollama_payload_includes_default_num_ctx(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CMRAG_LLM_NUM_CTX", raising=False)
+    payload = _capture_ollama_payload(monkeypatch)
+    OllamaProvider(model="x").generate("prompt")
+    assert payload["options"]["num_ctx"] == 8192
+
+
+def test_ollama_payload_num_ctx_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CMRAG_LLM_NUM_CTX", "16384")
+    payload = _capture_ollama_payload(monkeypatch)
+    OllamaProvider(model="x").generate("prompt")
+    assert payload["options"]["num_ctx"] == 16384
+
+
+def test_ollama_payload_num_ctx_zero_defers_to_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CMRAG_LLM_NUM_CTX", "0")
+    payload = _capture_ollama_payload(monkeypatch)
+    OllamaProvider(model="x").generate("prompt")
+    assert "num_ctx" not in payload["options"]
+
+
+def test_get_llm_num_ctx_garbage_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    from crossmodalrag.config import get_llm_num_ctx
+
+    monkeypatch.setenv("CMRAG_LLM_NUM_CTX", "lots")
+    assert get_llm_num_ctx() == 8192
+
+
+# --- done_reason=length surfaces as GeneratedAnswer.truncated ------------------------------
+
+
+def _stream_response_lines(lines: list[dict]):
+    body = "\n".join(json.dumps(obj) for obj in lines).encode("utf-8")
+
+    class _FakeResp(io.BytesIO):
+        def __init__(self) -> None:
+            super().__init__(body)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    return _FakeResp
+
+
+def test_provider_records_done_reason_length(monkeypatch: pytest.MonkeyPatch) -> None:
+    resp = _stream_response_lines(
+        [{"response": "partial ans", "done": False}, {"done": True, "done_reason": "length"}]
+    )
+    monkeypatch.setattr(
+        provider_mod.urllib.request, "urlopen", lambda request, timeout=None: resp()
+    )
+    p = OllamaProvider(model="x")
+    assert p.generate("prompt") == "partial ans"
+    assert p.last_done_reason == "length"
+
+
+def test_truncated_flag_and_warning_on_length_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from crossmodalrag.generate.answer import format_generated_answer, generated_answer_to_dict
+    from crossmodalrag.generate.synthesize import synthesize_answer
+
+    resp = _stream_response_lines(
+        [{"response": "cut off mid", "done": False}, {"done": True, "done_reason": "length"}]
+    )
+    monkeypatch.setattr(
+        provider_mod.urllib.request, "urlopen", lambda request, timeout=None: resp()
+    )
+    gen = synthesize_answer("q", [_hit(1, "alpha")], OllamaProvider(model="x"), min_evidence_score=0.0)
+    assert gen.truncated is True
+    assert not gen.abstained
+    rendered = format_generated_answer(gen)
+    assert "cut off" in rendered and "CMRAG_LLM_NUM_CTX" in rendered
+    assert generated_answer_to_dict(gen)["truncated"] is True
+
+
+def test_normal_stop_is_not_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
+    from crossmodalrag.generate.answer import generated_answer_to_dict
+    from crossmodalrag.generate.synthesize import synthesize_answer
+
+    resp = _stream_response_lines(
+        [{"response": "complete answer [E1]", "done": False}, {"done": True, "done_reason": "stop"}]
+    )
+    monkeypatch.setattr(
+        provider_mod.urllib.request, "urlopen", lambda request, timeout=None: resp()
+    )
+    gen = synthesize_answer("q", [_hit(1, "alpha")], OllamaProvider(model="x"), min_evidence_score=0.0)
+    assert gen.truncated is False
+    assert generated_answer_to_dict(gen)["truncated"] is False

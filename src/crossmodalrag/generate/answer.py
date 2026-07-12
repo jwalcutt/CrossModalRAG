@@ -106,6 +106,14 @@ def _answer_trailer_lines(
 ) -> list[str]:
     """Citation warnings + evidence + debug blocks shared by buffered/streamed rendering."""
     lines: list[str] = []
+    if gen.truncated:
+        lines.append("")
+        lines.append(
+            "Warning: the answer was cut off — the model's context window filled "
+            "mid-generation"
+            + (" (no text was produced)" if not gen.answer_text.strip() else "")
+            + ". Raise CMRAG_LLM_NUM_CTX, lower --top-k, or ask a narrower question."
+        )
     if gen.invalid_citations:
         lines.append("")
         lines.append(
@@ -154,6 +162,7 @@ def generated_answer_to_dict(gen: GeneratedAnswer, *, total_seconds: float | Non
         "model": gen.model,
         "abstained": gen.abstained,
         "abstention_reason": gen.abstention_reason,
+        "truncated": gen.truncated,
         "answer": gen.answer_text,
         "timing": {
             "total_seconds": _round_seconds(total_seconds),
@@ -205,6 +214,7 @@ def template_answer_to_dict(
         "abstained": not hits,
         # No LLM in this path: the only abstention cause is empty retrieval.
         "abstention_reason": None if hits else "weak_retrieval",
+        "truncated": False,
         "answer": None,
         "timing": {
             "total_seconds": _round_seconds(total_seconds),

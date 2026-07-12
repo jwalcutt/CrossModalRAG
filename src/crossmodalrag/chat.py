@@ -65,12 +65,23 @@ def strip_citations(text: str) -> str:
     return CITATION_RE.sub("", text)
 
 
+# Per-answer character budget when rendering history into the prompt. Carried
+# answers are context, not content to reproduce — capping them keeps a full
+# 8-turn session comfortably inside the model context window
+# (CMRAG_LLM_NUM_CTX) alongside the evidence block. Deterministic head-truncation;
+# the stored ChatTurn keeps the full text.
+HISTORY_ANSWER_MAX_CHARS = 1200
+
+
 def render_history(turns: Sequence[ChatTurn]) -> str:
     """Deterministic history block for the evidence prompt; '' when no turns."""
     if not turns:
         return ""
     lines = [HISTORY_HEADER]
     for turn in turns:
+        answer = strip_citations(turn.answer_text)
+        if len(answer) > HISTORY_ANSWER_MAX_CHARS:
+            answer = answer[:HISTORY_ANSWER_MAX_CHARS].rstrip() + " […truncated]"
         lines.append(f"User: {turn.query}")
-        lines.append(f"Assistant: {strip_citations(turn.answer_text)}")
+        lines.append(f"Assistant: {answer}")
     return "\n".join(lines)

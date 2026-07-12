@@ -197,3 +197,15 @@ def test_service_stream_answer_events_threads_history(monkeypatch: pytest.Monkey
     )
     assert events[-1]["type"] == "answer"
     assert provider.prompts[0][0].startswith(HISTORY_HEADER)
+
+
+def test_render_history_caps_long_answers() -> None:
+    from crossmodalrag.chat import HISTORY_ANSWER_MAX_CHARS
+
+    long_answer = "x" * (HISTORY_ANSWER_MAX_CHARS + 500)
+    rendered = render_history([ChatTurn("q", long_answer)])
+    assistant_line = [l for l in rendered.splitlines() if l.startswith("Assistant:")][0]
+    assert assistant_line.endswith("[…truncated]")
+    assert len(assistant_line) < HISTORY_ANSWER_MAX_CHARS + 100
+    # Short answers are untouched.
+    assert render_history([ChatTurn("q", "short")]).endswith("Assistant: short")
