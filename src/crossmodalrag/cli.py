@@ -491,9 +491,11 @@ def history_cmd(
     top: int = 10,
     clear: bool = False,
     clear_id: int | None = None,
+    rename_id: int | None = None,
+    new_title: str | None = None,
     as_json: bool = False,
 ) -> None:
-    """List/show/clear locally saved chat conversations (`mem history`)."""
+    """List/show/clear/rename locally saved chat conversations (`mem history`)."""
     from crossmodalrag.conversations.contract import conversation_to_dict
     from crossmodalrag.conversations.store import (
         clear_conversations,
@@ -501,15 +503,28 @@ def history_cmd(
         get_conversation,
         list_conversations,
         list_messages,
+        rename_conversation,
     )
 
-    if clear and show_id is not None:
-        raise CLIError("--clear and --show cannot be combined.")
+    if sum(1 for flag in (clear, show_id is not None, rename_id is not None) if flag) > 1:
+        raise CLIError("--clear, --show, and --rename cannot be combined.")
 
     db_path = get_db_path()
     conn = connect(db_path)
     try:
         init_db(conn)
+
+        if rename_id is not None:
+            title = (new_title or "").strip()
+            if not title:
+                raise CLIError('--rename needs a name: mem history --rename <id> --title "…"')
+            if not rename_conversation(conn, rename_id, title=title[:200]):
+                raise CLIError(f"No saved conversation with id {rename_id}.")
+            if as_json:
+                print(json.dumps({"renamed": rename_id, "title": title[:200]}, indent=2))
+            else:
+                print(f'Renamed conversation #{rename_id} to "{title[:200]}".')
+            return
 
         if clear:
             deleted = clear_conversations(conn, conversation_id=clear_id)
@@ -1592,6 +1607,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--id", type=int, default=None, dest="clear_id",
         help="With --clear: delete only this conversation.",
     )
+    p_history.add_argument(
+        "--rename", type=int, default=None, dest="rename_id", metavar="ID",
+        help="Rename one conversation (requires --title).",
+    )
+    p_history.add_argument(
+        "--title", type=str, default=None, dest="new_title",
+        help='With --rename: the new conversation title, e.g. --title "Parser deep dive".',
+    )
     p_history.add_argument("--json", dest="as_json", action="store_true")
 
     p_eval = sub.add_parser(
@@ -1971,6 +1994,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None
             top=args.top,
             clear=args.clear,
             clear_id=args.clear_id,
+            rename_id=args.rename_id,
+            new_title=args.new_title,
             as_json=args.as_json,
         )
         return

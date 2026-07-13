@@ -118,6 +118,20 @@ def count_messages(conn: sqlite3.Connection, conversation_id: int) -> int:
     return int(row[0])
 
 
+def rename_conversation(conn: sqlite3.Connection, conversation_id: int, *, title: str) -> bool:
+    """Set a conversation's title (the user's own label overriding the auto-title).
+
+    Deliberately does NOT touch ``updated_at`` — renaming is bookkeeping, not
+    activity, so it must not reorder the history list. Commits. Returns False
+    when the conversation doesn't exist.
+    """
+    renamed = conn.execute(
+        "UPDATE conversations SET title = ? WHERE id = ?", (title, conversation_id)
+    ).rowcount
+    conn.commit()
+    return renamed > 0
+
+
 def clear_conversations(conn: sqlite3.Connection, *, conversation_id: int | None = None) -> int:
     """Delete saved history (all, or one conversation); returns conversations deleted.
 

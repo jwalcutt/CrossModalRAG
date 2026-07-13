@@ -190,3 +190,16 @@ def test_ask_json_identical_with_history_populated_vs_dropped(tmp_path, monkeypa
     conn.close()
     without_history = ask_payload()
     assert with_history == without_history
+
+
+def test_rename_conversation_updates_title_only(conn):
+    from crossmodalrag.conversations.store import rename_conversation
+
+    cid = _seed_conversation(conn)
+    before = get_conversation(conn, cid)
+    assert rename_conversation(conn, cid, title="Parser deep dive") is True
+    after = get_conversation(conn, cid)
+    assert after.title == "Parser deep dive"
+    # Renaming is bookkeeping, not activity: ordering keys are untouched.
+    assert (after.started_at, after.updated_at) == (before.started_at, before.updated_at)
+    assert rename_conversation(conn, 999, title="x") is False

@@ -1,10 +1,12 @@
 """Local HTTP API exposing the existing JSON contracts (the UI/Obsidian boundary).
 
 A thin FastAPI wrapper over the library functions — it adds no retrieval/derivation logic.
-Read-first: every memory/engine surface is GET-only and never writes. The single, explicit
-exception is ``POST /chat/stream`` (the web chat), whose only write is appending to the
-user-owned, additive chat-history tables (``conversations``/``messages`` — never ingestion or
-derivation state), respecting ``CMRAG_SAVE_HISTORY`` and the per-request ``save`` flag.
+Read-first: every memory/engine surface is GET-only and never writes. The explicit exceptions
+touch ONLY the user-owned, additive chat-history tables (``conversations``/``messages`` — never
+ingestion or derivation state): ``POST /chat/stream`` (the web chat; appends a turn, respecting
+``CMRAG_SAVE_HISTORY`` and the per-request ``save`` flag), ``PATCH /conversations/{id}``
+(rename), and ``DELETE /conversations/{id}`` (delete one saved conversation — the API twin of
+``mem history --clear --id``).
 Requires the opt-in ``[ui]`` extra; the module imports without it, and ``create_app`` raises
 ``MissingUIBackend`` when FastAPI is absent.
 """
@@ -155,6 +157,40 @@ def create_app():
                 return conversation_payload(conn, conversation_id)
             except ConversationNotFound as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/conversations/{conversation_id}")
+    def rename_conversation_route(conversation_id: int, body: dict) -> dict:
+        """Rename ONE saved conversation (user-owned data; overrides the auto-title).
+        One of the API's explicit write paths — see the module docstring."""
+        from crossmodalrag.conversations.contract import conversation_to_dict
+        from crossmodalrag.conversations.store import get_conversation, rename_conversation
+
+        title = str(body.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Missing or empty 'title'.")
+        title = title[:200]
+        with _conn() as conn:
+            if not rename_conversation(conn, conversation_id, title=title):
+                raise HTTPException(
+                    status_code=404, detail=f"No saved conversation with id {conversation_id}."
+                )
+            conversation = get_conversation(conn, conversation_id)
+            assert conversation is not None  # just renamed it
+            return conversation_to_dict(conn, conversation, include_messages=False)
+
+    @app.delete("/conversations/{conversation_id}")
+    def delete_conversation(conversation_id: int) -> dict:
+        """Delete ONE saved conversation (the user's own private data; no undo).
+        One of the API's two explicit write paths — see the module docstring."""
+        from crossmodalrag.conversations.store import clear_conversations
+
+        with _conn() as conn:
+            deleted = clear_conversations(conn, conversation_id=conversation_id)
+        if deleted == 0:
+            raise HTTPException(
+                status_code=404, detail=f"No saved conversation with id {conversation_id}."
+            )
+        return {"deleted": deleted}
 
     @app.post("/chat/stream")
     def chat_stream(body: dict) -> "StreamingResponse":

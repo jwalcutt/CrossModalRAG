@@ -856,19 +856,14 @@ a { color: var(--amber); text-underline-offset: 3px; }
 .conv-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .conv-item {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  align-items: stretch;
   width: 100%;
   min-width: 0;
-  padding: 7px 8px;
   border: 1px solid transparent;
   background: transparent;
   border-radius: 6px;
   color: var(--ink-dim);
   font-size: 12.5px;
-  cursor: pointer;
-  text-align: left;
   transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 .conv-item:hover { background: rgba(255, 255, 255, 0.04); color: var(--ink); }
@@ -877,7 +872,140 @@ a { color: var(--amber); text-underline-offset: 3px; }
   border-color: rgba(227, 168, 60, 0.28);
   color: var(--amber);
 }
+.conv-item { align-items: center; padding-right: 8px; }
+.conv-link {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 7px 8px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  border-radius: 6px;
+}
+
+/* The timestamp and the ⋮ menu trigger share ONE slot (stacked in a grid cell):
+   hovering or focusing the row swaps the time for the trigger — no extra width. */
+.conv-side {
+  flex: none;
+  display: inline-grid;
+  align-items: center;
+  justify-items: end;
+}
+.conv-side > * { grid-area: 1 / 1; }
+/* The timestamp is purely decorative — it must never steal the pointer from
+   the ⋮ trigger stacked in the same grid cell. */
+.conv-when { font-size: 10px; color: var(--ink-faint); pointer-events: none; }
+.conv-more {
+  z-index: 1; /* paint (and hit-test) above the stacked timestamp */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-dim);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, color 0.12s ease, background-color 0.12s ease;
+}
+.conv-item:hover .conv-when,
+.conv-item:focus-within .conv-when,
+.conv-item.menu-open .conv-when { opacity: 0; }
+.conv-item:hover .conv-more,
+.conv-item:focus-within .conv-more,
+.conv-item.menu-open .conv-more { opacity: 1; pointer-events: auto; }
+.conv-more:hover, .conv-item.menu-open .conv-more { color: var(--amber); background: rgba(227, 168, 60, 0.12); }
+
+/* Options menu: fixed-positioned so it escapes the scrolling list. */
+.conv-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 150px;
+  padding: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.conv-menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.conv-menu-item:hover { background: rgba(236, 230, 214, 0.06); }
+.conv-menu-item.danger { color: var(--oxblood); }
+.conv-menu-item.danger:hover { background: rgba(207, 111, 77, 0.12); }
+
+/* Delete-confirmation dialog */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.dialog {
+  width: min(420px, 100%);
+  padding: 22px 24px 20px;
+  background: var(--panel-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.dialog-title {
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 21px;
+  letter-spacing: -0.01em;
+}
+.dialog-body { margin: 0 0 20px; color: var(--ink-dim); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.dialog-btn {
+  padding: 8px 18px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink);
+  font-size: 14px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.dialog-btn:hover { background: rgba(255, 255, 255, 0.09); }
+.dialog-btn.danger {
+  background: var(--oxblood);
+  border-color: var(--oxblood);
+  color: var(--bg);
+}
+.dialog-btn.danger:hover { background: #d97e5c; border-color: #d97e5c; }
+
+.conv-item.renaming { padding: 2px; }
+.conv-rename-input {
+  width: 100%;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(227, 168, 60, 0.45);
+  border-radius: 5px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+.conv-rename-input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 .conv-title {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

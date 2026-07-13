@@ -338,3 +338,40 @@ def test_conversation_endpoint_matches_cli_history_json(client, chat_env, monkey
     cli_payload = json.loads(capsys.readouterr().out)
     api_payload = client.get(f"/conversations/{cid}").json()
     assert api_payload == cli_payload  # thin-client guarantee: one contract, two surfaces
+
+
+def test_delete_conversation_scoped(client, chat_env):
+    cid1 = _chat_events(client, {"q": "parser bounds fix?"})[-1]["conversation_id"]
+    cid2 = _chat_events(client, {"q": "parser overflow guard?"})[-1]["conversation_id"]
+    assert cid1 != cid2
+
+    r = client.delete(f"/conversations/{cid1}")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": 1}
+    assert client.get(f"/conversations/{cid1}").status_code == 404  # gone
+    assert client.get(f"/conversations/{cid2}").status_code == 200  # untouched
+    assert client.get("/conversations").json()["total"] == 1
+
+
+def test_delete_conversation_unknown_or_repeat_404(client, chat_env):
+    assert client.delete("/conversations/424242").status_code == 404
+    cid = _chat_events(client, {"q": "parser bounds fix?"})[-1]["conversation_id"]
+    assert client.delete(f"/conversations/{cid}").status_code == 200
+    assert client.delete(f"/conversations/{cid}").status_code == 404  # double delete
+
+
+def test_rename_conversation_endpoint(client, chat_env):
+    cid = _chat_events(client, {"q": "parser bounds fix?"})[-1]["conversation_id"]
+    r = client.patch(f"/conversations/{cid}", json={"title": "  Parser deep dive  "})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["title"] == "Parser deep dive"  # stripped
+    assert body["id"] == cid
+    assert client.get(f"/conversations/{cid}").json()["title"] == "Parser deep dive"
+
+
+def test_rename_conversation_endpoint_errors(client, chat_env):
+    assert client.patch("/conversations/424242", json={"title": "x"}).status_code == 404
+    cid = _chat_events(client, {"q": "parser bounds fix?"})[-1]["conversation_id"]
+    assert client.patch(f"/conversations/{cid}", json={}).status_code == 400
+    assert client.patch(f"/conversations/{cid}", json={"title": "   "}).status_code == 400

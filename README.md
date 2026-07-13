@@ -462,11 +462,13 @@ mem serve                       # web UI + API at http://127.0.0.1:8765  (Ctrl-C
 The API is **read-first**: every memory/engine route is GET and read-only (no writes; `/ask` does
 not record usage): `/health`, `/ask`, `/conversations`, `/conversations/{id}`, `/concepts`,
 `/timeline`, `/memory-stats`, `/forgetting`, `/recall`, `/drift`, `/distill`, `/usage` — each
-returns exactly the corresponding `--json` payload. The **single, explicit write path** is
-`POST /chat/stream` (the web chat): one persisted multi-turn chat turn (NDJSON token events, then
-a final answer event carrying the conversation id) whose only write is appending to the
-user-owned chat-history tables — the same store as `mem chat`, respecting `CMRAG_SAVE_HISTORY`
-and a per-request `save` flag, wipeable with `mem history --clear`. The web console is served at
+returns exactly the corresponding `--json` payload. The **explicit write paths** touch only the
+user-owned chat-history tables (the same store as `mem chat`): `POST /chat/stream` — one
+persisted multi-turn chat turn (NDJSON token events, then a final answer event carrying the
+conversation id), respecting `CMRAG_SAVE_HISTORY` and a per-request `save` flag — and
+`DELETE /conversations/{id}` — delete one saved conversation (the API twin of
+`mem history --clear --id <id>`; the web sidebar exposes it with a two-step confirm). Everything
+remains wipeable with `mem history --clear`. The web console is served at
 `/`; interactive API docs are at `/docs`. Use `--host`/`--port` to change the bind; binding to a
 non-loopback `--host` exposes the unauthenticated API on your network and is warned against.
 

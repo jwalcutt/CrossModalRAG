@@ -13,9 +13,10 @@ point-in-time snapshot, so drill-down survives re-chunking). The composer sits a
 page; retrieval/generation parameters live on the Settings page (localStorage-persisted, applied
 per request).
 
-Consumed endpoints: `/chat/stream` (POST — the API's single, explicit write path: appends to the
-user-owned chat-history tables only), `/conversations`, `/conversations/{id}`, plus the read views
-(`/concepts`, `/timeline`, `/drift`, `/forgetting`, `/recall`, `/memory-stats`, `/health`).
+Consumed endpoints: `/chat/stream` (POST) and `/conversations/{id}` (DELETE — the sidebar's
+per-conversation delete, behind a two-step confirm) are the API's only write paths, both scoped
+to the user-owned chat-history tables; plus the reads `/conversations`, `/conversations/{id}`,
+`/concepts`, `/timeline`, `/drift`, `/forgetting`, `/recall`, `/memory-stats`, `/health`.
 
 ## Build (ships with the `[ui]` extra)
 

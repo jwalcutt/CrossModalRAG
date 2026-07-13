@@ -19,6 +19,7 @@ from crossmodalrag.conversations.store import (
     list_conversations,
     list_messages,
     record_message,
+    rename_conversation,
     touch_conversation,
 )
 
@@ -36,5 +37,6 @@ __all__ = [
     "list_messages",
     "message_to_dict",
     "record_message",
+    "rename_conversation",
     "touch_conversation",
 ]

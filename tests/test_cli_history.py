@@ -113,3 +113,26 @@ def test_history_clear_and_show_conflict_errors(db, monkeypatch, capsys):
         cli.main()
     assert exc.value.code == 1
     assert "error:" in capsys.readouterr().err
+
+
+def test_history_rename(db, monkeypatch, capsys):
+    _run(monkeypatch, ["history", "--rename", str(db), "--title", "Parser deep dive", "--json"])
+    assert json.loads(capsys.readouterr().out) == {"renamed": db, "title": "Parser deep dive"}
+    _run(monkeypatch, ["history", "--show", str(db), "--json"])
+    assert json.loads(capsys.readouterr().out)["title"] == "Parser deep dive"
+
+
+def test_history_rename_requires_title(db, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["mem", "history", "--rename", str(db)])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "--title" in capsys.readouterr().err
+
+
+def test_history_rename_conflicts_with_show(db, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["mem", "history", "--rename", "1", "--title", "x", "--show", "1"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "error:" in capsys.readouterr().err

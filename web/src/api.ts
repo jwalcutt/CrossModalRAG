@@ -225,6 +225,19 @@ export const api = {
       { top },
     ),
   conversation: (id: number) => get<ConversationDetail>(`/conversations/${id}`),
+  deleteConversation: async (id: number): Promise<void> => {
+    const res = await fetch(`/conversations/${id}`, { method: "DELETE" });
+    if (!res.ok) await throwHttpError(res);
+  },
+  renameConversation: async (id: number, title: string): Promise<ConversationSummary> => {
+    const res = await fetch(`/conversations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) await throwHttpError(res);
+    return res.json() as Promise<ConversationSummary>;
+  },
   concepts: (top = 40) => get<{ concepts: ConceptView[] }>("/concepts", { top }),
   timeline: (limit = 80) => get<{ timeline: EpisodeView[] }>("/timeline", { limit }),
   memoryStats: () => get<MemoryStats>("/memory-stats"),

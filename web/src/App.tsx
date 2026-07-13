@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import { api, type ConversationSummary, type Health } from "./api";
 import { ChatView } from "./chat";
@@ -96,6 +96,225 @@ function parseHash(): Route {
   return { view: "chat", conversationId: null };
 }
 
+function ConversationItem({
+  conversation,
+  active,
+  collapsed,
+  onOpen,
+  onDelete,
+  onRename,
+}: {
+  conversation: ConversationSummary;
+  active: boolean;
+  collapsed: boolean;
+  onOpen: () => void;
+  onDelete: () => void;
+  onRename: (title: string) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState("");
+  const moreRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const name = conversation.title || `Conversation #${conversation.id}`;
+
+  const closeMenu = useCallback(() => {
+    setMenuOpen(false);
+  }, []);
+
+  // The menu is fixed-positioned (it must escape the scrolling list), so any
+  // outside interaction — click, Escape, scroll — dismisses it.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (
+        !menuRef.current?.contains(e.target as Node) &&
+        !moreRef.current?.contains(e.target as Node)
+      ) {
+        closeMenu();
+      }
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") closeMenu();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("resize", closeMenu);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("resize", closeMenu);
+    };
+  }, [menuOpen, closeMenu]);
+
+  function toggleMenu() {
+    if (menuOpen) {
+      closeMenu();
+      return;
+    }
+    const rect = moreRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    setMenuOpen(true);
+  }
+
+  function commitRename() {
+    const title = draft.trim();
+    setRenaming(false);
+    if (title && title !== name) onRename(title);
+  }
+
+  if (renaming) {
+    return (
+      <div className="conv-item renaming" aria-current={active ? "page" : undefined}>
+        <input
+          className="conv-rename-input"
+          value={draft}
+          aria-label={`Rename "${name}"`}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitRename();
+            if (e.key === "Escape") setRenaming(false);
+          }}
+          onBlur={commitRename}
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`conv-item${menuOpen ? " menu-open" : ""}`}
+      aria-current={active ? "page" : undefined}
+    >
+      <button
+        type="button"
+        className="conv-link"
+        title={collapsed ? name : undefined}
+        onClick={onOpen}
+      >
+        <span className="conv-title nav-label">{name}</span>
+      </button>
+      {/* The timestamp and the ⋮ trigger share one slot: hovering (or focusing)
+          the row swaps the time for the menu — no extra width reserved. */}
+      <span className="conv-side nav-label" aria-hidden={false}>
+        <span className="conv-when num">{shortWhen(conversation.updated_at)}</span>
+        <button
+          ref={moreRef}
+          type="button"
+          className="conv-more"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          aria-label={`Options for "${name}"`}
+          title="Rename or delete"
+          onClick={toggleMenu}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            fill="currentColor"
+            stroke="none"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="5" r="1.7" />
+            <circle cx="12" cy="12" r="1.7" />
+            <circle cx="12" cy="19" r="1.7" />
+          </svg>
+        </button>
+      </span>
+      {menuOpen && menuPos && (
+        <div
+          ref={menuRef}
+          className="conv-menu"
+          role="menu"
+          aria-label={`Options for "${name}"`}
+          style={{ top: menuPos.top, right: menuPos.right }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="conv-menu-item"
+            onClick={() => {
+              closeMenu();
+              setDraft(name);
+              setRenaming(true);
+            }}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="conv-menu-item danger"
+            onClick={() => {
+              closeMenu();
+              onDelete();
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfirmDeleteDialog({
+  name,
+  onCancel,
+  onConfirm,
+}: {
+  name: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus(); // safe default: Enter dismisses rather than deletes
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <div className="dialog-backdrop" onMouseDown={onCancel}>
+      <div
+        className="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-dialog-title"
+        aria-describedby="delete-dialog-body"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <h2 className="dialog-title" id="delete-dialog-title">
+          Delete chat
+        </h2>
+        <p className="dialog-body" id="delete-dialog-body">
+          Are you sure you want to delete “{name}”? This cannot be undone.
+        </p>
+        <div className="dialog-actions">
+          <button ref={cancelRef} type="button" className="dialog-btn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="dialog-btn danger" onClick={onConfirm}>
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function shortWhen(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -116,6 +335,7 @@ export function App() {
   const [convsCollapsed, setConvsCollapsed] = useState<boolean>(
     () => localStorage.getItem("convs-collapsed") === "1",
   );
+  const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
 
   useEffect(() => {
     localStorage.setItem("rail-collapsed", collapsed ? "1" : "0");
@@ -162,6 +382,35 @@ export function App() {
   const onConversationUpdate = useCallback(
     (_conv: ConversationSummary | null) => {
       refreshConversations();
+    },
+    [refreshConversations],
+  );
+
+  const deleteConversation = useCallback(
+    async (id: number) => {
+      try {
+        await api.deleteConversation(id);
+      } catch {
+        refreshConversations(); // it may already be gone; resync either way
+        return;
+      }
+      setConversations((list) => list.filter((c) => c.id !== id)); // optimistic
+      refreshConversations();
+      if (parseHash().conversationId === id) navigate("chat");
+    },
+    [refreshConversations],
+  );
+
+  const renameConversation = useCallback(
+    async (id: number, title: string) => {
+      setConversations((list) =>
+        list.map((c) => (c.id === id ? { ...c, title } : c)),
+      ); // optimistic
+      try {
+        await api.renameConversation(id, title);
+      } finally {
+        refreshConversations();
+      }
     },
     [refreshConversations],
   );
@@ -293,19 +542,15 @@ export function App() {
               {!convsCollapsed && (
                 <div className="conv-list">
                   {conversations.map((c) => (
-                    <button
+                    <ConversationItem
                       key={c.id}
-                      type="button"
-                      className="conv-item"
-                      aria-current={
-                        isChat && route.conversationId === c.id ? "page" : undefined
-                      }
-                      title={collapsed ? (c.title ?? `#${c.id}`) : undefined}
-                      onClick={() => navigate(`c/${c.id}`)}
-                    >
-                      <span className="conv-title nav-label">{c.title || `Conversation #${c.id}`}</span>
-                      <span className="conv-when num nav-label">{shortWhen(c.updated_at)}</span>
-                    </button>
+                      conversation={c}
+                      active={isChat && route.conversationId === c.id}
+                      collapsed={collapsed}
+                      onOpen={() => navigate(`c/${c.id}`)}
+                      onDelete={() => setDeleteTarget(c)}
+                      onRename={(title) => void renameConversation(c.id, title)}
+                    />
                   ))}
                 </div>
               )}
@@ -341,6 +586,18 @@ export function App() {
           </AnimatePresence>
         </main>
       </div>
+
+      {deleteTarget && (
+        <ConfirmDeleteDialog
+          name={deleteTarget.title || `Conversation #${deleteTarget.id}`}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            const id = deleteTarget.id;
+            setDeleteTarget(null);
+            void deleteConversation(id);
+          }}
+        />
+      )}
     </MotionConfig>
   );
 }
