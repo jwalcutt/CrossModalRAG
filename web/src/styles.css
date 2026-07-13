@@ -529,7 +529,9 @@ a { color: var(--amber); text-underline-offset: 3px; }
 
 /* timeline */
 .timeline { border-left: 1px solid var(--rule-strong); margin-left: 8px; padding-left: 0; }
-.tl-item { position: relative; padding: 0 0 22px 28px; content-visibility: auto; contain-intrinsic-size: auto 80px; }
+/* No content-visibility here: its implied paint containment clips the ::before
+   bullet, which hangs left of the item's box to sit on the rail line. */
+.tl-item { position: relative; padding: 0 0 22px 28px; }
 .tl-item::before {
   content: "";
   position: absolute;

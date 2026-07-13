@@ -157,7 +157,10 @@ export function ConceptsView() {
 
 export function TimelineView() {
   const { data, error, loading } = useAsync(() => api.timeline(120), []);
-  const items = data?.timeline ?? [];
+  // Newest first: the API returns episodes in ascending time order.
+  const items = [...(data?.timeline ?? [])].sort((a, b) =>
+    (b.time_start ?? "").localeCompare(a.time_start ?? ""),
+  );
   return (
     <>
       <ViewHead
