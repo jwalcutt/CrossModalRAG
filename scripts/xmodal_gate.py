@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the Phase 3 native-embedding gate (pre-committed, see project-scope.md §1a).
+"""Evaluate the pre-committed native-embedding gate.
 
 Runs retrieval eval over the two cross-modal slices and reports whether the
 OCR-text-first shortfall justifies a native (CLIP-class) image-embedding spike:
@@ -7,8 +7,7 @@ OCR-text-first shortfall justifies a native (CLIP-class) image-embedding spike:
     GATE: FIRE  when  Recall@K(text-heavy) - Recall@K(visual-heavy) >= 0.30
     GATE: HOLD  otherwise
 
-NOTE: this is only meaningful after Phase 3 step-3 (OCR-text-first ingestion)
-exists. Before then the cross-modal fixtures are materialized but not ingested,
+NOTE: this is only meaningful once OCR-text-first ingestion exists. Before then the cross-modal fixtures are materialized but not ingested,
 so both slices score ~0 and the gate correctly HOLDs.
 
 Authoritative measurement protocol: the native-embedding alternative is *semantic*,
@@ -52,7 +51,7 @@ VISUAL_PREFIX = "[sample-xmodal-visual]"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Report the Phase 3 native-embedding gate for cross-modal retrieval."
+        description="Report the native-embedding gate for cross-modal retrieval."
     )
     parser.add_argument(
         "--db-path",

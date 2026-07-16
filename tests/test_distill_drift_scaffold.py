@@ -21,7 +21,7 @@ from crossmodalrag.evaluation import (
 from crossmodalrag.memory.store import delete_node, insert_node
 from crossmodalrag.sample_data import purge_seeded_sample_data, seed_sample_data
 
-PHASE5_TABLES = ("distilled_nodes", "drift_snapshots")
+DISTILL_DRIFT_TABLES = ("distilled_nodes", "drift_snapshots")
 
 
 @pytest.fixture
@@ -53,43 +53,43 @@ def _table_names(conn) -> set[str]:
 # --- additive schema ----------------------------------------------------------
 
 
-def test_init_db_creates_phase5_tables(conn):
+def test_init_db_creates_distill_drift_tables(conn):
     tables = _table_names(conn)
-    for table in PHASE5_TABLES:
+    for table in DISTILL_DRIFT_TABLES:
         assert table in tables
 
 
-def test_phase5_tables_are_additive_and_recreatable(conn):
-    # A pre-existing memory node must survive re-running init_db after the Phase 5 tables are
-    # dropped (the migration is additive: it never touches existing rows/tables).
+def test_distill_drift_tables_are_additive_and_recreatable(conn):
+    # A pre-existing memory node must survive re-running init_db after the distill/drift tables
+    # are dropped (the migration is additive: it never touches existing rows/tables).
     node_id = insert_node(conn, level=3, node_type="concept", title="kept concept")
     conn.commit()
 
-    for table in PHASE5_TABLES:
+    for table in DISTILL_DRIFT_TABLES:
         conn.execute(f"DROP TABLE {table}")
     conn.commit()
-    assert not (set(PHASE5_TABLES) & _table_names(conn))
+    assert not (set(DISTILL_DRIFT_TABLES) & _table_names(conn))
 
     init_db(conn)
-    assert set(PHASE5_TABLES) <= _table_names(conn)
+    assert set(DISTILL_DRIFT_TABLES) <= _table_names(conn)
     # Existing data untouched.
     assert conn.execute("SELECT title FROM memory_nodes WHERE id = ?", (node_id,)).fetchone()[
         "title"
     ] == "kept concept"
 
 
-def test_phase5_tables_inert_after_seed(seeded):
-    # Scaffolding writes nothing to the Phase 5 tables, so the layer cannot affect ranking
-    # (ablation: dropping it changes nothing). Derivation lands in a later step.
+def test_distill_drift_tables_inert_after_seed(seeded):
+    # Seeding writes nothing to the distill/drift tables, so the layer cannot affect ranking
+    # (ablation: dropping it changes nothing). Derivation runs only via `mem build-memory`.
     conn, _, _ = seeded
-    for table in PHASE5_TABLES:
+    for table in DISTILL_DRIFT_TABLES:
         assert conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"] == 0
 
 
 # --- delete_node cleanup ------------------------------------------------------
 
 
-def test_delete_node_purges_phase5_rows(conn):
+def test_delete_node_purges_distill_drift_rows(conn):
     node_id = insert_node(conn, level=3, node_type="concept", title="doomed concept")
     conn.execute(
         "INSERT INTO distilled_nodes (node_id, level) VALUES (?, ?)",

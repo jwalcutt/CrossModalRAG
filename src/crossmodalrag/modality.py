@@ -5,8 +5,8 @@ declares *what kind of evidence it is* and *where in its source it came from*.
 It is deliberately storage-light: the contract lives inside the existing
 ``evidence_chunks.metadata_json`` free-form JSON column, so no schema change is
 needed. Today's text/code ingestion already stamps ``{"modality": ...}`` there
-(see ``ingest/notes.py`` and ``ingest/git.py``); cross-modal ingestion (Phase 3
-steps 2-3) and citation rendering (step 4) reuse the helpers here.
+(see ``ingest/notes.py`` and ``ingest/git.py``); cross-modal ingestion and
+citation rendering reuse the helpers here.
 
 Contract (stable; additive only):
 

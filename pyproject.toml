@@ -13,13 +13,13 @@ dependencies = []
 
 [project.optional-dependencies]
 embeddings = ["fastembed>=0.3", "numpy>=1.24"]
-# Cross-modal ingestion (Phase 3). Each modality is opt-in so the core stays
+# Cross-modal ingestion. Each modality is opt-in so the core stays
 # dependency-free; absent extras degrade gracefully (see crossmodalrag.capabilities).
 pdf = ["pypdf>=4.0"]
 ocr = ["pytesseract>=0.3", "pillow>=10.0"]
-# Native (CLIP-class) image embeddings — gated, only adopted on measured benefit (step 6).
+# Native (CLIP-class) image embeddings: gated, only adopted on measured benefit.
 image-embeddings = ["fastembed>=0.3", "numpy>=1.24"]
-# Local read-only HTTP API (`mem serve`) — the boundary the web UI / Obsidian call (Phase 6).
+# Local HTTP API (`mem serve`): the boundary the web UI calls.
 # Opt-in so the core stays dependency-free; `httpx` powers FastAPI's TestClient.
 ui = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27"]
 

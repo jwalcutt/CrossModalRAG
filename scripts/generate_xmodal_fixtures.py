@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the synthetic cross-modal eval fixtures (Phase 3, step 1).
+"""Regenerate the synthetic cross-modal eval fixtures.
 
 These tiny, synthetic, no-personal-data files back the ``[sample-xmodal-*]``
 eval slices. They are committed under ``tests/fixtures/sample_seed/documents/``;
@@ -9,7 +9,7 @@ It is a **dev-only** tool: it imports Pillow (the ``[ocr]`` extra ships it) and 
 never imported by the ``mem seed-sample`` runtime path, so the core/seed stay
 dependency-free. The PDF is hand-rolled (no reportlab/pypdf needed).
 
-Two deliberate slices (see the project gate in dev-steps.md / project-scope.md):
+Two deliberate slices (see the pre-committed native-embedding gate):
 
 - **Text-heavy** (`spec.pdf`, `notes-screenshot.png`): the answer is in the
   extractable PDF text / OCR-readable rendered text. OCR-text-first should find it.

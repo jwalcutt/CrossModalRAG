@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Built web UI (Phase 6 step 4), produced by `web/` (Vite) and committed here. Served at the API
+# Built web UI, produced by `web/` (Vite) and committed here. Served at the API
 # root when present; the API routes above take precedence over the SPA's static mount.
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -75,7 +75,7 @@ def create_app():
     from crossmodalrag.usage.strength import usage_summary_to_dict
 
     app = FastAPI(
-        title="CrossModalRAG local API",
+        title="Engram local API",
         version="1",
         description="Read-only access to the local memory engine. Localhost-only; no auth.",
     )

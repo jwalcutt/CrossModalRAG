@@ -18,7 +18,7 @@ from crossmodalrag.sample_data import purge_seeded_sample_data  # noqa: E402
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Remove synthetic sample-seed data from a CrossModalRAG database."
+        description="Remove synthetic sample-seed data from an Engram database."
     )
     parser.add_argument(
         "--db-path",

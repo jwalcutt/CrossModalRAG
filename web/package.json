@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Local web UI for the CrossModalRAG memory engine (built into the [ui] extra).",
+  "description": "Local web UI for the Engram memory engine (built into the [ui] extra).",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

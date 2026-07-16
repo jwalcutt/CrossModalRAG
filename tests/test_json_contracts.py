@@ -1,4 +1,4 @@
-"""Phase 6 step 1: stable JSON output contracts (the UI/API boundary).
+"""Stable JSON output contracts (the UI/API boundary).
 
 Pins the documented key sets for every read-view `--json` contract — unit tests on the library
 `*_to_dict` / `list_*` / `memory_stats` helpers, plus end-to-end shape tests through `cli.main`.

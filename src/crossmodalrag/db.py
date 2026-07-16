@@ -138,12 +138,12 @@ CREATE TABLE IF NOT EXISTS recall_cards (
 
 -- distilled (compact, retrieval-preserving) representation of an L2/L3 node, one row per node.
 -- per node. ADDITIVE and OPT-IN: it never mutates memory_nodes/L0 and is excluded from every
--- content/derivation fingerprint, so dropping this table restores the Phase 1-4 baseline exactly.
+-- content/derivation fingerprint, so dropping this table restores the pre-distillation baseline exactly.
 -- ``node_id`` is polymorphic into memory_nodes (no DB FK, mirroring memory_edges); integrity is
 -- enforced in app code + tests. ``core_evidence_json`` is a JSON list of REAL L0 evidence_chunks
 -- ids (a subset of resolve_to_evidence) so provenance survives compression — never a paraphrase
 -- that replaces the evidence. ``vector`` is the distilled summary embedding (float32 BLOB, model-
--- tagged), parallel to node_embeddings. Derivation lands in a later Phase 5 step; this is scaffold.
+-- tagged), parallel to node_embeddings. Derived by `mem build-memory --level distill`.
 CREATE TABLE IF NOT EXISTS distilled_nodes (
     node_id INTEGER PRIMARY KEY,
     level INTEGER NOT NULL,
@@ -165,8 +165,8 @@ CREATE INDEX IF NOT EXISTS idx_distilled_nodes_fingerprint ON distilled_nodes(de
 -- it restores the baseline. ``concept_id`` is polymorphic into memory_nodes (no DB FK). The
 -- ``prototype_vector`` is the centroid of the concept's member-event embeddings within
 -- [window_start, window_end); ``drift_metric`` is the movement vs the previous window; ``support``
--- is the member count (explicit-uncertainty signal for thin windows). Computation lands in a later
--- Phase 5 step; this is scaffold.
+-- is the member count (explicit-uncertainty signal for thin windows). Computed by
+-- `mem build-memory --level drift`.
 CREATE TABLE IF NOT EXISTS drift_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     concept_id INTEGER NOT NULL,

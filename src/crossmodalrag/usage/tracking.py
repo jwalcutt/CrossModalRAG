@@ -1,4 +1,4 @@
-"""Record real interaction events into the usage signal (Phase 4 step 3).
+"""Record real interaction events into the usage signal.
 
 Privacy-minimal: only target id + event type + time are written — never query text.
 Tracking is opt-in (see ``config.usage_tracking_enabled``) and must never break the

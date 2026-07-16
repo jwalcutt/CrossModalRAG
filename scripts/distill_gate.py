@@ -57,7 +57,7 @@ DRIFT_PREFIX = "[sample-drift]"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Report the Phase 5 distillation gate (retrieval-preserving compression)."
+        description="Report the distillation gate (retrieval-preserving compression)."
     )
     parser.add_argument(
         "--db-path",
@@ -144,7 +144,7 @@ def main() -> None:
     )
 
     if distilled is None:
-        print("distilled:   not built (Phase 5 scaffolding) — no compact representation to compare")
+        print("distilled:   not built; no compact representation to compare")
         print(
             f"gate budget: epsilon={epsilon:.3f}  target compression ratio<={target_ratio:.2f}"
         )

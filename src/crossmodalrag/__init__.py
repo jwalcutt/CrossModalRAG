@@ -1,2 +1,2 @@
-"""CrossModalRAG package."""
+"""Engram package."""
 

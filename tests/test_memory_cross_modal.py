@@ -1,4 +1,4 @@
-"""Phase 3 step 5: cross-modal evidence flows up into L1-L3 and drills back to L0 locators."""
+"""Cross-modal evidence flows up into L1-L3 and drills back to L0 locators."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Active-recall prompt generation (Phase 4 step 5).
+"""Active-recall prompt generation.
 
 Turn the top forgetting-risk memories into grounded study cards (a question + a
 one-sentence, evidence-grounded answer). Mirrors the L1-extraction discipline

@@ -169,7 +169,7 @@ def main() -> None:
         for qtext, fname, rank in diag:
             print(f"  [{name}] '{qtext}…' -> {fname} at CLIP rank {rank}")
 
-    # Verdict (feasibility + benefit) — recorded into dev-steps from this output.
+    # Verdict (feasibility + benefit), recorded from this output.
     text_a = next(r[1] for r in rows if r[0] == "text-heavy")
     text_ab = next(r[3] for r in rows if r[0] == "text-heavy")
     vis_a = next(r[1] for r in rows if r[0] == "visual-heavy")

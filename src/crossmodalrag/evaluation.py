@@ -47,10 +47,10 @@ def eval_summary_to_dict(summary: "EvalSummary") -> dict:
     }
 
 
-# Phase 3 native-embedding gate (pre-committed, see project-scope.md §1a /
-# dev-steps.md Phase 3). Native (CLIP-class) image embeddings become justified
-# when, after the step-3 OCR-text-first baseline, the visually-dominant slice
-# trails the text-dominant slice on Recall@K by at least this much.
+# The pre-committed native-embedding gate. Native (CLIP-class) image embeddings
+# become justified when, measured against the OCR-text-first baseline, the
+# visually-dominant slice trails the text-dominant slice on Recall@K by at least
+# this much.
 XMODAL_GATE_THRESHOLD = 0.30
 
 

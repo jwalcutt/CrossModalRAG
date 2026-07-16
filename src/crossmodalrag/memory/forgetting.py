@@ -1,4 +1,4 @@
-"""Forgetting-risk estimation (Phase 4 step 4).
+"""Forgetting-risk estimation.
 
 "What am I likely forgetting that's still important?" — score memory nodes by
 ``importance × staleness`` and surface the high-risk ones, each grounded to L0.

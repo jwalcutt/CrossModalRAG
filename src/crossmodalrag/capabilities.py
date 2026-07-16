@@ -1,4 +1,4 @@
-"""Optional cross-modal backend probes (Phase 3).
+"""Optional cross-modal backend probes.
 
 Cross-modal ingestion depends on optional extras (``[pdf]``, ``[ocr]``) so the
 core install stays dependency-free. This module mirrors the graceful-degradation
@@ -8,11 +8,11 @@ pattern in ``embed/provider.py`` (``MissingEmbeddingBackend`` /
 - ``has_pdf()`` / ``has_ocr()`` return a bool — callers that can skip a modality
   use these to degrade gracefully.
 - ``require_pdf()`` / ``require_ocr()`` raise :class:`MissingModalityBackend` with
-  an actionable install hint — used by the (Phase 3 step 2-3) ingestion pipelines
-  that strictly need the backend.
+  an actionable install hint, used by the ingestion pipelines that strictly need
+  the backend.
 
-Only the probe lives here; the actual imports/skip-with-message wiring lands with
-the pipelines in later steps.
+Only the probe lives here; the actual imports and skip-with-message wiring live in
+the ingestion pipelines.
 """
 
 from __future__ import annotations

@@ -170,7 +170,7 @@ def get_distill_epsilon() -> float:
 
 
 def get_distill_compression_ratio() -> float:
-    """Target distilled-size / full-size for the Phase 5 distillation gate (0 < x <= 1). Default 0.5."""
+    """Target distilled-size / full-size for the distillation gate (0 < x <= 1). Default 0.5."""
     raw = os.getenv("CMRAG_DISTILL_COMPRESSION_RATIO", "0.5").strip()
     try:
         value = float(raw)
@@ -228,7 +228,7 @@ def get_numbered_env_paths(prefix: str) -> list[Path]:
     return [path for _, path in indexed]
 
 
-# --- Optional TOML config file (Phase 6) -------------------------------------------------
+# --- Optional TOML config file ------------------------------------------------------------
 # A `crossmodalrag.toml` (or `$CMRAG_CONFIG`) supplies connector paths + retrieval defaults.
 # Precedence is always: explicit CLI flag > environment/.env > config file > built-in default.
 # The file is optional and never required; a missing/malformed file degrades to "{}" silently.

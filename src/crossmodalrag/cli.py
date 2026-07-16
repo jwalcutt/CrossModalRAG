@@ -1303,7 +1303,7 @@ def doctor_cmd(as_json: bool = False) -> None:
         print(json.dumps(report, indent=2))
         return
 
-    print(f"CrossModalRAG doctor — DB: {report['db']['path']}")
+    print(f"Engram doctor. DB: {report['db']['path']}")
     print(f"  DB exists: {report['db']['exists']} ({report['db']['size_bytes']} bytes)")
     ex = report["extras"]
     print(f"  Extras: embeddings={ex['embeddings']} pdf={ex['pdf']} ocr={ex['ocr']}")
@@ -1403,12 +1403,12 @@ def serve_cmd(host: str = "127.0.0.1", port: int = 8765) -> None:
             f"WARNING: binding to {host} exposes the unauthenticated, read-only API beyond localhost.",
             file=sys.stderr,
         )
-    print(f"Serving CrossModalRAG local API on http://{host}:{port} (read-only). Press Ctrl-C to stop.")
+    print(f"Serving the Engram local API on http://{host}:{port}. Press Ctrl-C to stop.")
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="CrossModalRAG local memory CLI.")
+    parser = argparse.ArgumentParser(description="Engram local memory CLI.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db", help="Initialize SQLite database schema.")
